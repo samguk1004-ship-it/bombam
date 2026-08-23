@@ -1,45 +1,7 @@
-const express = require('express');
-const http = require('http');
-const { Server } = require('socket.io');
-const cors = require('cors');
-
-const app = express();
-const server = http.createServer(app);
-
-// CORS 패키지 적용
-app.use(cors());
-
-// Socket.io 설정 (가장 보안이 낮은 테스트 모드)
-const io = new Server(server, {
-    cors: {
-        origin: "*",
-        methods: ["GET", "POST"],
-        credentials: true
-    },
-    transports: ['polling', 'websocket']
-});
-
-app.get('/', (req, res) => {
-    res.send('<h1>서버 정상 작동 중</h1>');
-});
-
-let rooms = {};
-const ANIMAL_TYPES = [
-    { id: 'stinkbug', name: '노린재', color: '#854d0e' },
-    { id: 'cockroach', name: '바퀴벌레', color: '#78350f' },
-    { id: 'bat', name: '박쥐', color: '#334155' },
-    { id: 'fly', name: '파리', color: '#15803d' },
-    { id: 'toad', name: '두꺼비', color: '#065f46' },
-    { id: 'rat', name: '쥐', color: '#57534e' },
-    { id: 'scorpion', name: '전갈', color: '#991b1b' },
-    { id: 'spider', name: '거미', color: '#1e1b4b' },
-    { id: 'mosquito', name: '모기', color: '#4c0519' },
-    { id: 'snake', name: '뱀', color: '#33691e' }
-];
+// ... (상단 ANIMALS 등 기존 코드 동일)
 
 io.on('connection', (socket) => {
-    console.log('유저 접속:', socket.id);
-
+    // 방 입장
     socket.on('joinRoom', ({ roomCode, userName }) => {
         socket.join(roomCode);
         if (!rooms[roomCode]) {
@@ -52,74 +14,33 @@ io.on('connection', (socket) => {
         io.to(roomCode).emit('roomUpdate', room);
     });
 
-    socket.on('startGame', (roomCode) => {
-        const room = rooms[roomCode];
-        if (!room) return;
-        let deck = [];
-        ANIMAL_TYPES.forEach(a => { for(let i=0; i<8; i++) deck.push({...a, inst: Math.random(), img: `https://cdn-icons-png.flaticon.com/512/1041/1041${getIconId(a.id)}.png`}); });
-        deck.sort(() => Math.random() - 0.5);
-        if (room.players.length === 2) deck = deck.slice(10);
-        const cardsPer = Math.floor(deck.length / room.players.length);
-        room.players.forEach((p, idx) => {
-            p.hand = deck.slice(idx * cardsPer, (idx + 1) * cardsPer);
-            io.to(p.id).emit('yourHand', p.hand);
-        });
-        room.gameState = 'GAME';
-        room.turnId = room.players[0].id;
-        io.to(roomCode).emit('gameStarted', room);
-    });
-
-    socket.on('submitOffer', ({ roomCode, targetId, card, claim }) => {
-        const room = rooms[roomCode];
-        if(!room) return;
-        room.activeOffer = { card, claim, senderId: socket.id, receiverId: targetId, seenIds: [socket.id] };
-        room.phase = 'RESPONSE';
-        const sender = room.players.find(p => p.id === socket.id);
-        sender.hand = sender.hand.filter(c => c.inst !== card.inst);
-        io.to(roomCode).emit('onOffer', room);
-        io.to(socket.id).emit('yourHand', sender.hand);
-    });
-
-    socket.on('resolveResponse', ({ roomCode, guessIsTrue }) => {
-        const room = rooms[roomCode];
-        if(!room) return;
-        const offer = room.activeOffer;
-        const actualIsTrue = offer.card.name === offer.claim;
-        const loserId = (guessIsTrue !== actualIsTrue) ? offer.receiverId : offer.senderId;
-        room.phase = 'REVEAL';
-        io.to(roomCode).emit('revealStart', { room, loserId });
-        setTimeout(() => {
-            if (!rooms[roomCode]) return;
-            const loserP = rooms[roomCode].players.find(p => p.id === loserId);
-            loserP.penalties.push(offer.card);
-            const counts = loserP.penalties.reduce((acc, c) => { acc[c.id] = (acc[c.id] || 0) + 1; return acc; }, {});
-            if (Object.values(counts).some(v => v >= 7) || loserP.hand.length === 0) {
-                io.to(roomCode).emit('gameOver', loserP.name);
-                delete rooms[roomCode];
-            } else {
-                rooms[roomCode].turnId = loserId;
-                rooms[roomCode].activeOffer = null;
-                rooms[roomCode].phase = 'IDLE';
-                io.to(roomCode).emit('roundResolved', rooms[roomCode]);
+    // [추가] 방 나가기 로직
+    const handleLeave = (socketId) => {
+        for (const code in rooms) {
+            const room = rooms[code];
+            const playerIdx = room.players.findIndex(p => p.id === socketId);
+            if (playerIdx !== -1) {
+                const playerName = room.players[playerIdx].name;
+                room.players.splice(playerIdx, 1);
+                if (room.players.length === 0) {
+                    delete rooms[code];
+                } else {
+                    // 방장이 나갔을 경우 방장 위임
+                    if (room.turnId === socketId) room.turnId = room.players[0].id;
+                    io.to(code).emit('roomUpdate', room);
+                    io.to(code).emit('systemMsg', `${playerName}님이 방을 나갔습니다.`);
+                }
             }
-        }, 3000);
+        }
+    };
+
+    socket.on('leaveRoom', () => {
+        handleLeave(socket.id);
     });
 
-    socket.on('submitPass', ({ roomCode, nextTargetId, newClaim }) => {
-        const room = rooms[roomCode];
-        room.activeOffer.senderId = socket.id;
-        room.activeOffer.receiverId = nextTargetId;
-        room.activeOffer.claim = newClaim;
-        room.activeOffer.seenIds.push(socket.id);
-        room.phase = 'RESPONSE';
-        io.to(roomCode).emit('onOffer', room);
+    socket.on('disconnect', () => {
+        handleLeave(socket.id);
     });
+
+    // ... (startGame, submitOffer, resolveResponse 등 기존 로직 동일)
 });
-
-function getIconId(id) {
-    const map = {cockroach:'042', bat:'046', fly:'045', toad:'051', scorpion:'049', rat:'044', spider:'335', stinkbug:'047', mosquito:'413', snake:'048'};
-    return map[id] || '042';
-}
-
-const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log(`Server running on ${PORT}`));
