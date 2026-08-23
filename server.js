@@ -7,9 +7,9 @@ const app = express();
 const server = http.createServer(app);
 app.use(cors());
 
-const io = new Server(server, { cors: { origin: "*", methods: ["GET", "POST"] } });
+const io = new Server(server, { cors: { origin: "*" }, transports: ['polling', 'websocket'] });
 
-app.get('/', (req, res) => { res.send('<h1>Cockroach Master Server</h1>'); });
+app.get('/', (req, res) => { res.send('Cockroach Master Server Live'); });
 
 let rooms = {};
 const ANIMAL_TYPES = [
@@ -46,6 +46,7 @@ io.on('connection', (socket) => {
             for(let i=0; i<10; i++) deck.push({...a, inst: Math.random(), img: `https://cdn-icons-png.flaticon.com/512/1041/1041${getIconId(a.id)}.png`});
         });
         deck.sort(() => Math.random() - 0.5);
+        if (room.players.length === 2) deck = deck.slice(10);
         const cardsPer = Math.floor(deck.length / room.players.length);
         room.players.forEach((p, idx) => {
             const hand = deck.slice(idx * cardsPer, (idx + 1) * cardsPer);
@@ -54,7 +55,6 @@ io.on('connection', (socket) => {
         });
         room.gameState = 'GAME';
         room.turnId = room.players[0].id;
-        room.phase = 'IDLE';
         io.to(roomCode).emit('gameStarted', room);
     });
 
@@ -68,32 +68,6 @@ io.on('connection', (socket) => {
         io.to(roomCode).emit('onOffer', room);
     });
 
-    socket.on('resolveResponse', ({ roomCode, guessIsTrue }) => {
-        const room = rooms[roomCode];
-        if(!room) return;
-        const offer = room.activeOffer;
-        const actualIsTrue = offer.card.name === offer.claim;
-        const attackWin = (guessIsTrue !== actualIsTrue);
-        const loserId = attackWin ? offer.receiverId : offer.senderId;
-        room.phase = 'REVEAL';
-        io.to(roomCode).emit('revealStart', { room, loserId, attackWin });
-        setTimeout(() => {
-            if (!rooms[roomCode]) return;
-            const loserP = rooms[roomCode].players.find(p => p.id === loserId);
-            loserP.penalties.push(offer.card);
-            const counts = loserP.penalties.reduce((acc, c) => { acc[c.id] = (acc[c.id] || 0) + 1; return acc; }, {});
-            if (Object.values(counts).some(v => v >= 7) || loserP.handCount === 0) {
-                io.to(roomCode).emit('gameOver', loserP.name);
-                delete rooms[roomCode];
-            } else {
-                rooms[roomCode].turnId = loserId;
-                rooms[roomCode].activeOffer = null;
-                rooms[roomCode].phase = 'IDLE';
-                io.to(roomCode).emit('roundResolved', rooms[roomCode]);
-            }
-        }, 4000);
-    });
-
     socket.on('submitPass', ({ roomCode, nextTargetId, newClaim }) => {
         const room = rooms[roomCode];
         if(!room) return;
@@ -101,11 +75,33 @@ io.on('connection', (socket) => {
         room.activeOffer.receiverId = nextTargetId;
         room.activeOffer.claim = newClaim;
         room.activeOffer.seenIds.push(socket.id);
-        room.phase = 'RESPONSE';
         io.to(roomCode).emit('onOffer', room);
     });
 
-    socket.on('leaveRoom', () => { /* 퇴장 로직 */ });
+    socket.on('resolveResponse', ({ roomCode, guessIsTrue }) => {
+        const room = rooms[roomCode];
+        if(!room) return;
+        const offer = room.activeOffer;
+        const actualIsTrue = offer.card.name === offer.claim;
+        const attackWin = (guessIsTrue !== actualIsTrue);
+        const loserId = attackWin ? offer.receiverId : offer.senderId;
+
+        io.to(roomCode).emit('revealStart', { room, loserId, attackWin });
+
+        setTimeout(() => {
+            if (!rooms[roomCode]) return;
+            const loserP = rooms[roomCode].players.find(p => p.id === loserId);
+            loserP.penalties.push(offer.card);
+            if (Object.values(loserP.penalties.reduce((acc, c) => ({...acc, [c.id]: (acc[c.id] || 0) + 1}), {})).some(v => v >= 7) || loserP.handCount === 0) {
+                io.to(roomCode).emit('gameOver', loserP.name);
+                delete rooms[roomCode];
+            } else {
+                rooms[roomCode].turnId = loserId;
+                rooms[roomCode].activeOffer = null;
+                io.to(roomCode).emit('roundResolved', rooms[roomCode]);
+            }
+        }, 4000);
+    });
 });
 
 function getIconId(id) {
@@ -114,4 +110,4 @@ function getIconId(id) {
 }
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log(`Server on ${PORT}`));
+server.listen(PORT, () => console.log(`Server running on ${PORT}`));
