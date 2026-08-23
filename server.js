@@ -4,16 +4,9 @@ const { Server } = require('socket.io');
 const cors = require('cors');
 
 const app = express();
-const server = http.createServer(app);
-
 app.use(cors());
-
-const io = new Server(server, {
-    cors: { origin: "*", methods: ["GET", "POST"], credentials: true },
-    transports: ['polling', 'websocket'] 
-});
-
-app.get('/', (req, res) => { res.send('Cockroach Poker Server is Live'); });
+const server = http.createServer(app);
+const io = new Server(server, { cors: { origin: "*", methods: ["GET", "POST"] } });
 
 const ANIMALS = [
     { id: 'cockroach', name: '바퀴벌레', color: '#78350f', img: 'https://cdn-icons-png.flaticon.com/512/1041/1041042.png' },
@@ -23,79 +16,59 @@ const ANIMALS = [
     { id: 'scorpion', name: '전갈', color: '#991b1b', img: 'https://cdn-icons-png.flaticon.com/512/1041/1041049.png' },
     { id: 'rat', name: '쥐', color: '#57534e', img: 'https://cdn-icons-png.flaticon.com/512/1041/1041044.png' },
     { id: 'spider', name: '거미', color: '#1e1b4b', img: 'https://cdn-icons-png.flaticon.com/512/3026/3026335.png' },
-    { id: 'stinkbug', name: '노린재', color: '#854d0e', img: 'https://cdn-icons-png.flaticon.com/512/1041/1041047.png' }
+    { id: 'stinkbug', name: '노린재', color: '#854d0e', img: 'https://cdn-icons-png.flaticon.com/512/1041/1041047.png' },
+    { id: 'mosquito', name: '모기', color: '#dc2626', img: 'https://cdn-icons-png.flaticon.com/512/1574/1574160.png' },
+    { id: 'snake', name: '뱀', color: '#16a34a', img: 'https://cdn-icons-png.flaticon.com/512/2929/2929554.png' }
 ];
 
-let rooms = {};
+const rooms = {};
 
 io.on('connection', (socket) => {
-    console.log('🟢 유저 접속:', socket.id);
-
     socket.on('joinRoom', ({ roomCode, userName }) => {
-        if (!roomCode || !userName) return;
         socket.join(roomCode);
-        
         if (!rooms[roomCode]) {
-            rooms[roomCode] = { code: roomCode, players: [], phase: 'LOBBY' };
+            rooms[roomCode] = { code: roomCode, players: [], phase: 'LOBBY', turnId: null, activeOffer: null, revealData: null, loserId: null };
         }
-        const room = rooms[roomCode];
-        
-        if (!room.players.find(p => p.id === socket.id)) {
-            room.players.push({ id: socket.id, name: userName, penalties: [], handCount: 0, hand: [] });
+        if(!rooms[roomCode].players.find(p => p.id === socket.id)) {
+            rooms[roomCode].players.push({ id: socket.id, name: userName, hand: [], penalties: [], handCount: 0 });
         }
-        
-        io.to(roomCode).emit('roomUpdate', room);
+        io.to(roomCode).emit('roomUpdate', rooms[roomCode]);
     });
 
     socket.on('startGame', (roomCode) => {
         const room = rooms[roomCode];
         if (!room) return;
 
-        room.phase = 'GAME';
-
+        const useAnimals = room.players.length >= 7 ? ANIMALS : ANIMALS.slice(0, 8);
         let deck = [];
-        let instId = 0;
-        ANIMALS.forEach(animal => {
-            for(let i = 0; i < 8; i++) deck.push({ ...animal, inst: instId++ });
+        useAnimals.forEach(a => {
+            for(let i=0; i<8; i++) deck.push({ ...a, inst: a.id + '_' + Math.random() });
         });
+        deck.sort(() => Math.random() - 0.5);
 
-        for (let i = deck.length - 1; i > 0; i--) {
-            const j = Math.floor(Math.random() * (i + 1));
-            [deck[i], deck[j]] = [deck[j], deck[i]];
-        }
-
-        room.players.forEach(p => p.hand = []);
+        room.players.forEach(p => { p.hand = []; p.penalties = []; });
+        
         let pIdx = 0;
         while(deck.length > 0) {
-            room.players[pIdx % room.players.length].hand.push(deck.pop());
-            pIdx++;
+            room.players[pIdx].hand.push(deck.pop());
+            pIdx = (pIdx + 1) % room.players.length;
         }
-
+        
+        room.players.forEach(p => p.handCount = p.hand.length);
+        room.phase = 'GAME';
         room.turnId = room.players[0].id;
-
-        room.players.forEach(p => { p.handCount = p.hand.length; });
-
+        room.loserId = null;
         io.to(roomCode).emit('gameStarted', room);
     });
 
     socket.on('submitOffer', ({ roomCode, targetId, card, claim }) => {
         const room = rooms[roomCode];
         if(!room) return;
+        const player = room.players.find(p => p.id === socket.id);
+        player.hand = player.hand.filter(c => c.inst !== card.inst);
+        player.handCount = player.hand.length;
 
-        const sender = room.players.find(p => p.id === socket.id);
-        if(sender) {
-            sender.hand = sender.hand.filter(c => c.inst !== card.inst);
-            sender.handCount = sender.hand.length;
-        }
-
-        room.activeOffer = {
-            originId: socket.id,
-            receiverId: targetId,
-            card: card,
-            claim: claim,
-            seenIds: [socket.id]
-        };
-        
+        room.activeOffer = { originalSenderId: socket.id, seenIds: [socket.id], receiverId: targetId, card, claim };
         room.phase = 'RESPONSE';
         io.to(roomCode).emit('onOffer', room);
     });
@@ -103,55 +76,65 @@ io.on('connection', (socket) => {
     socket.on('submitPass', ({ roomCode, nextTargetId, newClaim }) => {
         const room = rooms[roomCode];
         if(!room || !room.activeOffer) return;
-
+        room.activeOffer.seenIds.push(socket.id);
         room.activeOffer.receiverId = nextTargetId;
         room.activeOffer.claim = newClaim;
-        room.activeOffer.seenIds.push(socket.id);
-
-        room.phase = 'RESPONSE';
         io.to(roomCode).emit('onOffer', room);
     });
 
-    // 👇 핵심 수정: 진실/거짓 판독 시 애니메이션(REVEAL) 딜레이 생성
     socket.on('resolveResponse', ({ roomCode, guessIsTrue }) => {
         const room = rooms[roomCode];
         if(!room || !room.activeOffer) return;
 
-        const offer = room.activeOffer;
-        const isTruth = (offer.card.name === offer.claim);
-        const guessCorrect = (guessIsTrue === isTruth);
+        const { card, claim, receiverId, seenIds } = room.activeOffer;
+        const isTrue = card.name === claim;
+        const guessCorrect = (guessIsTrue === isTrue);
+        
+        const lastSenderId = seenIds[seenIds.length - 1];
+        const finalPenaltyId = guessCorrect ? lastSenderId : receiverId;
 
-        const attackerId = offer.seenIds[offer.seenIds.length - 1];
-        let penaltyReceiverId = guessCorrect ? attackerId : socket.id;
-
+        room.revealData = { guessCorrect, actualCard: card, penaltyId: finalPenaltyId };
         room.phase = 'REVEAL';
-        room.revealData = {
-            guessCorrect: guessCorrect,
-            actualCard: offer.card,
-            penaltyId: penaltyReceiverId
-        };
-
-        // 전체 유저에게 카드 뒤집기 애니메이션을 재생하라고 신호 전달
         io.to(roomCode).emit('revealStart', room);
 
-        // 4.5초 뒤에 카드를 벌칙칸에 넣고 다음 턴으로 전환
         setTimeout(() => {
-            if (rooms[roomCode]) {
-                const penalizedPlayer = rooms[roomCode].players.find(p => p.id === penaltyReceiverId);
-                if(penalizedPlayer) penalizedPlayer.penalties.push(offer.card);
+            const p = room.players.find(x => x.id === finalPenaltyId);
+            let isGameOver = false;
 
-                rooms[roomCode].turnId = penaltyReceiverId;
-                rooms[roomCode].activeOffer = null;
-                rooms[roomCode].revealData = null;
-                rooms[roomCode].phase = 'IDLE';
+            if(p) {
+                p.penalties.push(card);
+                
+                // 🛑 동일한 동물 카드 ID가 4장 이상 모였는지 정확히 체크
+                const countById = {};
+                p.penalties.forEach(c => {
+                    countById[c.id] = (countById[c.id] || 0) + 1;
+                });
+                
+                const hasFourSame = Object.values(countById).some(count => count >= 4);
 
-                io.to(roomCode).emit('roundResolved', rooms[roomCode]);
+                if (hasFourSame) {
+                    isGameOver = true;
+                }
+                // 손패가 0장인 경우 패배
+                if (p.hand.length === 0) {
+                    isGameOver = true;
+                }
             }
-        }, 4500);
-    });
 
-    socket.on('disconnect', () => { console.log('🔴 유저 접속 종료:', socket.id); });
+            if(isGameOver) {
+                room.phase = 'GAME_OVER';
+                room.loserId = finalPenaltyId;
+            } else {
+                room.phase = 'IDLE';
+                room.turnId = finalPenaltyId;
+            }
+            
+            room.activeOffer = null;
+            room.revealData = null;
+            io.to(roomCode).emit('roundResolved', room);
+        }, 3500);
+    });
 });
 
-const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log(`🚀 Server is running on port ${PORT}`));
+const PORT = process.env.PORT || 3001;
+server.listen(PORT, () => console.log('Server running on port ' + PORT));
