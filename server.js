@@ -6,7 +6,7 @@ const cors = require('cors');
 const app = express();
 const server = http.createServer(app);
 
-// [수정] 모든 도메인 접속 허용 (가장 확실한 설정)
+// 모든 도메인 접속 허용 (가장 확실한 설정)
 app.use(cors());
 
 const io = new Server(server, {
@@ -23,7 +23,7 @@ app.get('/', (req, res) => { res.send('Cockroach Server is Live'); });
 let rooms = {};
 
 io.on('connection', (socket) => {
-    console.log('새로운 유저 접속:', socket.id);
+    console.log('🟢 새로운 유저 접속:', socket.id);
 
     socket.on('joinRoom', ({ roomCode, userName }) => {
         if (!roomCode || !userName) return;
@@ -39,7 +39,7 @@ io.on('connection', (socket) => {
             room.players.push({ id: socket.id, name: userName, penalties: [], handCount: 0 });
         }
         
-        console.log(`[방 ${roomCode}] ${userName} 입장 성공`);
+        console.log(`[방 ${roomCode}] ${userName} 입장 성공 (현재 인원: ${room.players.length}명)`);
         // 중요: 방 전체에 알림 (본인 포함)
         io.to(roomCode).emit('roomUpdate', room);
     });
@@ -48,12 +48,15 @@ io.on('connection', (socket) => {
         const room = rooms[roomCode];
         if (room) {
             room.gameState = 'GAME';
+            console.log(`[방 ${roomCode}] 게임 시작!`);
             io.to(roomCode).emit('gameStarted', room);
         }
     });
 
-    socket.on('disconnect', () => { console.log('유저 접속 종료'); });
+    socket.on('disconnect', () => { 
+        console.log('🔴 유저 접속 종료:', socket.id); 
+    });
 });
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log(`Server is running on port ${PORT}`));
+server.listen(PORT, () => console.log(`🚀 Server is running on port ${PORT}`));
