@@ -84,7 +84,7 @@ io.on('connection', (socket) => {
 
     socket.on('resolveResponse', ({ roomCode, guessIsTrue }) => {
         const room = rooms[roomCode];
-        if(!room || !room.activeOffer) return;
+        if(!room || !room.activeOffer || room.phase === 'REVEAL') return; // 중복 실행 방지
 
         const { card, claim, receiverId, seenIds } = room.activeOffer;
         const isTrue = card.name === claim;
@@ -98,13 +98,16 @@ io.on('connection', (socket) => {
         io.to(roomCode).emit('revealStart', room);
 
         setTimeout(() => {
+            // 방이 이미 폭파되었거나 상태가 리셋되었는지 확인
+            if (!rooms[roomCode] || rooms[roomCode] !== room) return;
+
             const p = room.players.find(x => x.id === finalPenaltyId);
             let isGameOver = false;
 
             if(p) {
                 p.penalties.push(card);
                 
-                // 🛑 동일한 동물 카드 ID가 4장 이상 모였는지 정확히 체크
+                // 동일한 동물 카드 ID가 4장 이상 모였는지 체크
                 const countById = {};
                 p.penalties.forEach(c => {
                     countById[c.id] = (countById[c.id] || 0) + 1;
@@ -112,11 +115,7 @@ io.on('connection', (socket) => {
                 
                 const hasFourSame = Object.values(countById).some(count => count >= 4);
 
-                if (hasFourSame) {
-                    isGameOver = true;
-                }
-                // 손패가 0장인 경우 패배
-                if (p.hand.length === 0) {
+                if (hasFourSame || p.hand.length === 0) {
                     isGameOver = true;
                 }
             }
@@ -127,10 +126,10 @@ io.on('connection', (socket) => {
             } else {
                 room.phase = 'IDLE';
                 room.turnId = finalPenaltyId;
+                room.activeOffer = null;
+                room.revealData = null;
             }
             
-            room.activeOffer = null;
-            room.revealData = null;
             io.to(roomCode).emit('roundResolved', room);
         }, 3500);
     });
