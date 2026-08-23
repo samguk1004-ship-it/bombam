@@ -171,7 +171,11 @@ io.on('connection', (socket) => {
         });
 
         room.phase = 'PLAYING';
-        room.turnId = room.players[0].id;
+        
+        // 게임 시작 시 방장이 아닌 무작위(랜덤) 플레이어로 첫 턴 지정
+        const randomIdx = Math.floor(Math.random() * room.players.length);
+        room.turnId = room.players[randomIdx].id;
+
         room.activeOffer = null;
         room.loserId = null;
 
@@ -255,7 +259,6 @@ io.on('connection', (socket) => {
             let loser = room.players.find(p => {
                 if (p.hand.length === 0) return true;
                 
-                // 7인 이상 플레이 시 동일 카드 3장만 모아도 패배로 판정 (밸런스 조절)
                 const defeatLimit = room.players.length >= 7 ? 3 : 4;
 
                 const counts = {};
