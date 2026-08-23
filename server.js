@@ -58,13 +58,18 @@ io.on('connection', (socket) => {
         room.phase = 'GAME';
         room.turnId = room.players[0].id;
         room.loserId = null;
+        room.activeOffer = null;
+        room.revealData = null;
         io.to(roomCode).emit('gameStarted', room);
     });
 
     socket.on('submitOffer', ({ roomCode, targetId, card, claim }) => {
         const room = rooms[roomCode];
-        if(!room) return;
+        if(!room || socket.id !== room.turnId) return;
+        
         const player = room.players.find(p => p.id === socket.id);
+        if (!player) return;
+
         player.hand = player.hand.filter(c => c.inst !== card.inst);
         player.handCount = player.hand.length;
 
@@ -76,6 +81,7 @@ io.on('connection', (socket) => {
     socket.on('submitPass', ({ roomCode, nextTargetId, newClaim }) => {
         const room = rooms[roomCode];
         if(!room || !room.activeOffer) return;
+        
         room.activeOffer.seenIds.push(socket.id);
         room.activeOffer.receiverId = nextTargetId;
         room.activeOffer.claim = newClaim;
@@ -84,7 +90,7 @@ io.on('connection', (socket) => {
 
     socket.on('resolveResponse', ({ roomCode, guessIsTrue }) => {
         const room = rooms[roomCode];
-        if(!room || !room.activeOffer || room.phase === 'REVEAL') return; // 중복 실행 방지
+        if(!room || !room.activeOffer || room.phase === 'REVEAL') return;
 
         const { card, claim, receiverId, seenIds } = room.activeOffer;
         const isTrue = card.name === claim;
@@ -98,7 +104,6 @@ io.on('connection', (socket) => {
         io.to(roomCode).emit('revealStart', room);
 
         setTimeout(() => {
-            // 방이 이미 폭파되었거나 상태가 리셋되었는지 확인
             if (!rooms[roomCode] || rooms[roomCode] !== room) return;
 
             const p = room.players.find(x => x.id === finalPenaltyId);
@@ -107,7 +112,6 @@ io.on('connection', (socket) => {
             if(p) {
                 p.penalties.push(card);
                 
-                // 동일한 동물 카드 ID가 4장 이상 모였는지 체크
                 const countById = {};
                 p.penalties.forEach(c => {
                     countById[c.id] = (countById[c.id] || 0) + 1;
