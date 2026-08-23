@@ -8,10 +8,10 @@ const server = http.createServer(app);
 
 app.use(cors());
 
-// 통신 끊김 방지를 위해 websocket 전용으로 설정
+// 🟢 통신 충돌(400 에러) 방지를 위해 polling과 websocket 모두 허용하도록 수정됨
 const io = new Server(server, {
     cors: { origin: "*", methods: ["GET", "POST"], credentials: true },
-    transports: ['websocket'] 
+    transports: ['polling', 'websocket'] 
 });
 
 app.get('/', (req, res) => { res.send('Cockroach Poker Server is Live'); });
