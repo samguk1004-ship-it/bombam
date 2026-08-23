@@ -16,7 +16,6 @@ const io = new Server(server, {
 
 const rooms = {};
 
-// 동물 종류별 기본 구성 (8종 기본 / 7인 이상 시 모기, 뱀 포함 10종)
 const BASE_ANIMALS = [
     { id: 'cockroach', name: '바퀴벌레', color: '#78350f' },
     { id: 'bat', name: '박쥐', color: '#334155' },
@@ -45,7 +44,6 @@ function createDeck(animalList) {
             });
         }
     });
-    // 덱 섞기 (Fisher-Yates Shuffle)
     for (let i = deck.length - 1; i > 0; i--) {
         const j = Math.floor(Math.random() * (i + 1));
         [deck[i], deck[j]] = [deck[j], deck[i]];
@@ -53,48 +51,35 @@ function createDeck(animalList) {
     return deck;
 }
 
-// 5분(300,000ms) 동안 활동이 없는 유저 자동 강퇴 및 방 관리 루프
+// 5분 미활동 유저 자동 강퇴 루프
 setInterval(() => {
     const now = Date.now();
-    const TIMEOUT_LIMIT = 5 * 60 * 1000; // 5분
+    const TIMEOUT_LIMIT = 5 * 60 * 1000;
 
     for (let roomCode in rooms) {
         let room = rooms[roomCode];
         if (!room || !room.players) continue;
 
         let originalCount = room.players.length;
-        
         room.players = room.players.filter(p => {
             if (p.lastActive && (now - p.lastActive > TIMEOUT_LIMIT)) {
-                // 강퇴 이벤트 전송
                 io.to(p.id).emit('kicked', '5분 동안 활동이 없어 방에서 추방되었습니다.');
                 const targetSocket = io.sockets.sockets.get(p.id);
-                if (targetSocket) {
-                    targetSocket.leave(roomCode);
-                }
+                if (targetSocket) targetSocket.leave(roomCode);
                 return false;
             }
             return true;
         });
 
-        // 플레이어 인원이 변경되었을 때 처리
         if (room.players.length !== originalCount) {
             if (room.players.length === 0) {
                 delete rooms[roomCode];
             } else {
-                // 게임 중이거나 로비일 때 상태 동기화
-                if (room.phase === 'PLAYING') {
-                    // 플레이어가 나갔을 때 턴이나 게임 오버 조건 체크 가능
-                    const activePlayerExists = room.players.some(p => p.id === room.turnId);
-                    if (!activePlayerExists && room.players.length > 0) {
-                        room.turnId = room.players[0].id;
-                    }
-                }
                 io.to(roomCode).emit('roomUpdate', getPublicRoomData(room));
             }
         }
     }
-}, 10000); // 10초마다 체크
+}, 10000);
 
 function getPublicRoomData(room) {
     return {
@@ -102,7 +87,7 @@ function getPublicRoomData(room) {
         players: room.players.map(p => ({
             ...p,
             handCount: p.hand.length,
-            hand: undefined // 서버 보안을 위해 내 손패는 개별 관리 혹은 클라이언트 전송 시 제외 (아래 소켓 통신에서 처리)
+            hand: undefined
         }))
     };
 }
@@ -119,7 +104,7 @@ function sendRoomState(roomCode) {
                 players: room.players.map(pl => ({
                     ...pl,
                     handCount: pl.hand.length,
-                    hand: pl.id === p.id ? pl.hand : undefined // 본인 손패만 전달
+                    hand: pl.id === p.id ? pl.hand : undefined
                 }))
             });
         }
@@ -127,7 +112,6 @@ function sendRoomState(roomCode) {
 }
 
 io.on('connection', (socket) => {
-    // 유저 활동 감지 시 갱신
     socket.on('userActivity', () => {
         for (let code in rooms) {
             let p = rooms[code].players.find(x => x.id === socket.id);
@@ -180,7 +164,6 @@ io.on('connection', (socket) => {
         const animalList = room.players.length >= 7 ? EXTENDED_ANIMALS : BASE_ANIMALS;
         const deck = createDeck(animalList);
 
-        // 카드 분배
         const cardsPerPlayer = Math.floor(deck.length / room.players.length);
         room.players.forEach((pl, idx) => {
             pl.hand = deck.slice(idx * cardsPerPlayer, (idx + 1) * cardsPerPlayer);
@@ -190,11 +173,13 @@ io.on('connection', (socket) => {
         room.phase = 'PLAYING';
         room.turnId = room.players[0].id;
         room.activeOffer = null;
+        room.loserId = null;
 
         sendRoomState(roomCode);
         io.to(roomCode).emit('gameStarted', getPublicRoomData(room));
     });
 
+    // 공격 카드 제출 및 블러핑 선언 처리
     socket.on('submitOffer', ({ roomCode, targetId, card, claim }) => {
         let room = rooms[roomCode];
         if (!room || room.turnId !== socket.id) return;
@@ -205,9 +190,10 @@ io.on('connection', (socket) => {
 
         sender.lastActive = Date.now();
 
-        // 덱에서 해당 카드 제거
         let cardIdx = sender.hand.findIndex(c => c.inst === card.inst);
         if (cardIdx === -1) return;
+        
+        // 손패에서 카드 제거
         sender.hand.splice(cardIdx, 1);
 
         room.activeOffer = {
@@ -217,11 +203,13 @@ io.on('connection', (socket) => {
             claim: claim,
             seenIds: [socket.id]
         };
+        room.phase = 'RESPONSE'; // 상태를 응답 대기 단계로 확실히 전환
 
         sendRoomState(roomCode);
         io.to(roomCode).emit('onOffer', getPublicRoomData(room));
     });
 
+    // 카드 넘기기 처리
     socket.on('submitPass', ({ roomCode, nextTargetId, newClaim }) => {
         let room = rooms[roomCode];
         if (!room || !room.activeOffer) return;
@@ -237,6 +225,7 @@ io.on('connection', (socket) => {
         io.to(roomCode).emit('onOffer', getPublicRoomData(room));
     });
 
+    // 진실/거짓 판독 처리
     socket.on('resolveResponse', ({ roomCode, guessIsTrue }) => {
         let room = rooms[roomCode];
         if (!room || !room.activeOffer) return;
@@ -259,6 +248,7 @@ io.on('connection', (socket) => {
             actualCard,
             penaltyId
         };
+        room.phase = 'REVEAL';
 
         io.to(roomCode).emit('revealStart', {
             ...getPublicRoomData(room),
@@ -266,7 +256,6 @@ io.on('connection', (socket) => {
         });
 
         setTimeout(() => {
-            // 게임오버 조건 체크 (동일한 벌칙 카드 4장 또는 손패 0장)
             let loser = room.players.find(p => {
                 if (p.hand.length === 0) return true;
                 const counts = {};
@@ -282,7 +271,7 @@ io.on('connection', (socket) => {
                 room.loserId = loser.id;
                 io.to(roomCode).emit('roomUpdate', getPublicRoomData(room));
             } else {
-                room.turnId = penaltyId; // 벌칙을 받은 사람이 다음 턴 시작
+                room.turnId = penaltyId; 
                 room.activeOffer = null;
                 room.revealData = null;
                 room.phase = 'PLAYING';
