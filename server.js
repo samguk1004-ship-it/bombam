@@ -86,12 +86,13 @@ function getPublicRoomData(room) {
         ...room,
         players: room.players.map(p => ({
             ...p,
-            handCount: p.hand.length,
+            handCount: p.hand ? p.hand.length : 0,
             hand: undefined
         }))
     };
 }
 
+// 각 플레이어별로 핸드(자기 카드)를 포함하여 방 상태 전송
 function sendRoomState(roomCode) {
     const room = rooms[roomCode];
     if (!room) return;
@@ -100,10 +101,10 @@ function sendRoomState(roomCode) {
         const socketInstance = io.sockets.sockets.get(p.id);
         if (socketInstance) {
             socketInstance.emit('roomUpdate', {
-                ...getPublicRoomData(room),
+                ...room,
                 players: room.players.map(pl => ({
                     ...pl,
-                    handCount: pl.hand.length,
+                    handCount: pl.hand ? pl.hand.length : 0,
                     hand: pl.id === p.id ? pl.hand : undefined
                 }))
             });
@@ -172,15 +173,27 @@ io.on('connection', (socket) => {
 
         room.phase = 'PLAYING';
         
-        // 게임 시작 시 방장이 아닌 무작위(랜덤) 플레이어로 첫 턴 지정
+        // 랜덤 시작 턴 지정
         const randomIdx = Math.floor(Math.random() * room.players.length);
         room.turnId = room.players[randomIdx].id;
 
         room.activeOffer = null;
         room.loserId = null;
 
-        sendRoomState(roomCode);
-        io.to(roomCode).emit('gameStarted', getPublicRoomData(room));
+        // 게임 시작 시 각 플레이어에게 핸드 데이터를 포함하여 gameStarted 이벤트 발송
+        room.players.forEach(pl => {
+            const socketInstance = io.sockets.sockets.get(pl.id);
+            if (socketInstance) {
+                socketInstance.emit('gameStarted', {
+                    ...room,
+                    players: room.players.map(otherPl => ({
+                        ...otherPl,
+                        handCount: otherPl.hand ? otherPl.hand.length : 0,
+                        hand: otherPl.id === pl.id ? otherPl.hand : undefined
+                    }))
+                });
+            }
+        });
     });
 
     socket.on('submitOffer', ({ roomCode, targetId, card, claim }) => {
