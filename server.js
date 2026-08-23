@@ -16,14 +16,14 @@ app.get('/', (req, res) => { res.send('Cockroach Master Server Live'); });
 
 let rooms = {};
 const ANIMAL_TYPES = [
-    { id: 'stinkbug', name: '노린재', color: '#854d0e' },
     { id: 'cockroach', name: '바퀴벌레', color: '#78350f' },
     { id: 'bat', name: '박쥐', color: '#334155' },
     { id: 'fly', name: '파리', color: '#15803d' },
     { id: 'toad', name: '두꺼비', color: '#065f46' },
-    { id: 'rat', name: '쥐', color: '#57534e' },
     { id: 'scorpion', name: '전갈', color: '#991b1b' },
+    { id: 'rat', name: '쥐', color: '#57534e' },
     { id: 'spider', name: '거미', color: '#1e1b4b' },
+    { id: 'stinkbug', name: '노린재', color: '#854d0e' },
     { id: 'mosquito', name: '모기', color: '#4c0519' },
     { id: 'snake', name: '뱀', color: '#33691e' }
 ];
@@ -44,21 +44,22 @@ io.on('connection', (socket) => {
     socket.on('startGame', (roomCode) => {
         const room = rooms[roomCode];
         if (!room) return;
+        
         let deck = [];
         ANIMAL_TYPES.forEach(a => {
             for(let i=0; i<8; i++) deck.push({...a, inst: Math.random(), img: `https://cdn-icons-png.flaticon.com/512/1041/1041${getIconId(a.id)}.png`});
         });
         deck.sort(() => Math.random() - 0.5);
-        if (room.players.length === 2) deck = deck.slice(10);
+
         const cardsPer = Math.floor(deck.length / room.players.length);
         room.players.forEach((p, idx) => {
             const hand = deck.slice(idx * cardsPer, (idx + 1) * cardsPer);
             p.handCount = hand.length;
             io.to(p.id).emit('yourHand', hand);
         });
+
         room.gameState = 'GAME';
         room.turnId = room.players[0].id;
-        room.phase = 'IDLE';
         io.to(roomCode).emit('gameStarted', room);
     });
 
@@ -66,20 +67,8 @@ io.on('connection', (socket) => {
         const room = rooms[roomCode];
         if(!room) return;
         room.activeOffer = { card, claim, senderId: socket.id, receiverId: targetId, seenIds: [socket.id] };
-        room.phase = 'RESPONSE';
         const sender = room.players.find(p => p.id === socket.id);
-        sender.handCount--;
-        io.to(roomCode).emit('onOffer', room);
-    });
-
-    socket.on('submitPass', ({ roomCode, nextTargetId, newClaim }) => {
-        const room = rooms[roomCode];
-        if(!room) return;
-        room.activeOffer.senderId = socket.id;
-        room.activeOffer.receiverId = nextTargetId;
-        room.activeOffer.claim = newClaim;
-        room.activeOffer.seenIds.push(socket.id);
-        room.phase = 'RESPONSE';
+        if(sender) sender.handCount--;
         io.to(roomCode).emit('onOffer', room);
     });
 
@@ -90,21 +79,23 @@ io.on('connection', (socket) => {
         const actualIsTrue = offer.card.name === offer.claim;
         const attackWin = (guessIsTrue !== actualIsTrue);
         const loserId = attackWin ? offer.receiverId : offer.senderId;
-        room.phase = 'REVEAL';
+
         io.to(roomCode).emit('revealStart', { room, loserId, attackWin });
+
         setTimeout(() => {
             if (!rooms[roomCode]) return;
-            const loserP = rooms[roomCode].players.find(p => p.id === loserId);
-            loserP.penalties.push(offer.card);
+            const r = rooms[roomCode];
+            const loserP = r.players.find(p => p.id === loserId);
+            if(loserP) loserP.penalties.push(offer.card);
+            
             const counts = loserP.penalties.reduce((acc, c) => ({...acc, [c.id]: (acc[c.id] || 0) + 1}), {});
             if (Object.values(counts).some(v => v >= 7) || loserP.handCount === 0) {
                 io.to(roomCode).emit('gameOver', loserP.name);
                 delete rooms[roomCode];
             } else {
-                rooms[roomCode].turnId = loserId;
-                rooms[roomCode].activeOffer = null;
-                rooms[roomCode].phase = 'IDLE';
-                io.to(roomCode).emit('roundResolved', rooms[roomCode]);
+                r.turnId = loserId;
+                r.activeOffer = null;
+                io.to(roomCode).emit('roundResolved', r);
             }
         }, 4000);
     });
