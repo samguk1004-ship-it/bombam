@@ -51,10 +51,10 @@ function createDeck(animalList) {
     return deck;
 }
 
-// 5분 미활동 유저 자동 강퇴 루프
+// 15분(900,000ms) 동안 활동이 없는 유저 자동 강퇴 루프
 setInterval(() => {
     const now = Date.now();
-    const TIMEOUT_LIMIT = 5 * 60 * 1000;
+    const TIMEOUT_LIMIT = 15 * 60 * 1000; // 15분
 
     for (let roomCode in rooms) {
         let room = rooms[roomCode];
@@ -63,7 +63,7 @@ setInterval(() => {
         let originalCount = room.players.length;
         room.players = room.players.filter(p => {
             if (p.lastActive && (now - p.lastActive > TIMEOUT_LIMIT)) {
-                io.to(p.id).emit('kicked', '5분 동안 활동이 없어 방에서 추방되었습니다.');
+                io.to(p.id).emit('kicked', '15분 동안 활동이 없어 방에서 추방되었습니다.');
                 const targetSocket = io.sockets.sockets.get(p.id);
                 if (targetSocket) targetSocket.leave(roomCode);
                 return false;
@@ -179,7 +179,6 @@ io.on('connection', (socket) => {
         io.to(roomCode).emit('gameStarted', getPublicRoomData(room));
     });
 
-    // 공격 카드 제출 및 블러핑 선언 처리
     socket.on('submitOffer', ({ roomCode, targetId, card, claim }) => {
         let room = rooms[roomCode];
         if (!room || room.turnId !== socket.id) return;
@@ -193,7 +192,6 @@ io.on('connection', (socket) => {
         let cardIdx = sender.hand.findIndex(c => c.inst === card.inst);
         if (cardIdx === -1) return;
         
-        // 손패에서 카드 제거
         sender.hand.splice(cardIdx, 1);
 
         room.activeOffer = {
@@ -203,13 +201,12 @@ io.on('connection', (socket) => {
             claim: claim,
             seenIds: [socket.id]
         };
-        room.phase = 'RESPONSE'; // 상태를 응답 대기 단계로 확실히 전환
+        room.phase = 'RESPONSE';
 
         sendRoomState(roomCode);
         io.to(roomCode).emit('onOffer', getPublicRoomData(room));
     });
 
-    // 카드 넘기기 처리
     socket.on('submitPass', ({ roomCode, nextTargetId, newClaim }) => {
         let room = rooms[roomCode];
         if (!room || !room.activeOffer) return;
@@ -225,7 +222,6 @@ io.on('connection', (socket) => {
         io.to(roomCode).emit('onOffer', getPublicRoomData(room));
     });
 
-    // 진실/거짓 판독 처리
     socket.on('resolveResponse', ({ roomCode, guessIsTrue }) => {
         let room = rooms[roomCode];
         if (!room || !room.activeOffer) return;
