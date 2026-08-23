@@ -7,9 +7,9 @@ const app = express();
 const server = http.createServer(app);
 app.use(cors());
 
-const io = new Server(server, { cors: { origin: "*" }, transports: ['polling', 'websocket'] });
+const io = new Server(server, { cors: { origin: "*" } });
 
-app.get('/', (req, res) => { res.send('Cockroach Master Server Live'); });
+app.get('/', (req, res) => { res.send('<h1>Server is Live</h1>'); });
 
 let rooms = {};
 const ANIMAL_TYPES = [
@@ -29,7 +29,7 @@ io.on('connection', (socket) => {
     socket.on('joinRoom', ({ roomCode, userName }) => {
         socket.join(roomCode);
         if (!rooms[roomCode]) {
-            rooms[roomCode] = { code: roomCode, players: [], gameState: 'LOBBY', turnId: null, activeOffer: null, phase: 'IDLE' };
+            rooms[roomCode] = { code: roomCode, players: [], gameState: 'LOBBY', turnId: null, activeOffer: null };
         }
         const room = rooms[roomCode];
         if (!room.players.find(p => p.id === socket.id)) {
@@ -46,7 +46,6 @@ io.on('connection', (socket) => {
             for(let i=0; i<10; i++) deck.push({...a, inst: Math.random(), img: `https://cdn-icons-png.flaticon.com/512/1041/1041${getIconId(a.id)}.png`});
         });
         deck.sort(() => Math.random() - 0.5);
-        if (room.players.length === 2) deck = deck.slice(10);
         const cardsPer = Math.floor(deck.length / room.players.length);
         room.players.forEach((p, idx) => {
             const hand = deck.slice(idx * cardsPer, (idx + 1) * cardsPer);
@@ -62,19 +61,8 @@ io.on('connection', (socket) => {
         const room = rooms[roomCode];
         if(!room) return;
         room.activeOffer = { card, claim, senderId: socket.id, receiverId: targetId, seenIds: [socket.id] };
-        room.phase = 'RESPONSE';
         const sender = room.players.find(p => p.id === socket.id);
         sender.handCount--;
-        io.to(roomCode).emit('onOffer', room);
-    });
-
-    socket.on('submitPass', ({ roomCode, nextTargetId, newClaim }) => {
-        const room = rooms[roomCode];
-        if(!room) return;
-        room.activeOffer.senderId = socket.id;
-        room.activeOffer.receiverId = nextTargetId;
-        room.activeOffer.claim = newClaim;
-        room.activeOffer.seenIds.push(socket.id);
         io.to(roomCode).emit('onOffer', room);
     });
 
@@ -85,9 +73,7 @@ io.on('connection', (socket) => {
         const actualIsTrue = offer.card.name === offer.claim;
         const attackWin = (guessIsTrue !== actualIsTrue);
         const loserId = attackWin ? offer.receiverId : offer.senderId;
-
         io.to(roomCode).emit('revealStart', { room, loserId, attackWin });
-
         setTimeout(() => {
             if (!rooms[roomCode]) return;
             const loserP = rooms[roomCode].players.find(p => p.id === loserId);
@@ -101,6 +87,16 @@ io.on('connection', (socket) => {
                 io.to(roomCode).emit('roundResolved', rooms[roomCode]);
             }
         }, 4000);
+    });
+
+    socket.on('submitPass', ({ roomCode, nextTargetId, newClaim }) => {
+        const room = rooms[roomCode];
+        if(!room) return;
+        room.activeOffer.senderId = socket.id;
+        room.activeOffer.receiverId = nextTargetId;
+        room.activeOffer.claim = newClaim;
+        room.activeOffer.seenIds.push(socket.id);
+        io.to(roomCode).emit('onOffer', room);
     });
 });
 
