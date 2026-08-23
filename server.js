@@ -254,10 +254,14 @@ io.on('connection', (socket) => {
         setTimeout(() => {
             let loser = room.players.find(p => {
                 if (p.hand.length === 0) return true;
+                
+                // 7인 이상 플레이 시 동일 카드 3장만 모아도 패배로 판정 (밸런스 조절)
+                const defeatLimit = room.players.length >= 7 ? 3 : 4;
+
                 const counts = {};
                 for (let c of p.penalties) {
                     counts[c.id] = (counts[c.id] || 0) + 1;
-                    if (counts[c.id] >= 4) return true;
+                    if (counts[c.id] >= defeatLimit) return true;
                 }
                 return false;
             });
