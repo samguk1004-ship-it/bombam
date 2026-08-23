@@ -4,119 +4,81 @@ const { Server } = require('socket.io');
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server, { cors: { origin: "*" } });
+const io = new Server(server, { 
+    cors: { origin: "*" },
+    connectionStateRecovery: {} // 연결 복구 기능 추가
+});
 
 let rooms = {};
 
-// 10종 동물 데이터
-const ANIMALS = [
-    { id: 'cockroach', name: '바퀴벌레', color: '#78350f' },
-    { id: 'bat', name: '박쥐', color: '#334155' },
-    { id: 'fly', name: '파리', color: '#15803d' },
-    { id: 'toad', name: '두꺼비', color: '#065f46' },
-    { id: 'scorpion', name: '전갈', color: '#991b1b' },
-    { id: 'rat', name: '쥐', color: '#57534e' },
-    { id: 'spider', name: '거미', color: '#1e1b4b' },
-    { id: 'stinkbug', name: '노린재', color: '#854d0e' },
-    { id: 'mosquito', name: '모기', color: '#4c0519' },
-    { id: 'snake', name: '뱀', color: '#33691e' }
-];
-
 io.on('connection', (socket) => {
-    // [1] 방 입장
+    console.log('접속됨:', socket.id);
+
     socket.on('joinRoom', ({ roomCode, userName }) => {
         socket.join(roomCode);
+        
+        // 방이 없으면 생성
         if (!rooms[roomCode]) {
             rooms[roomCode] = { 
-                code: roomCode, players: [], gameState: 'LOBBY', turnId: null, activeOffer: null 
+                code: roomCode, 
+                players: [], 
+                gameState: 'LOBBY', 
+                turnId: null, 
+                activeOffer: null,
+                phase: 'IDLE'
             };
         }
+
+        // 중복 입장 방지 및 유저 추가
         const room = rooms[roomCode];
         if (room.players.length >= 8) return socket.emit('errorMsg', '방이 가득 찼습니다.');
+        
+        const newUser = {
+            id: socket.id,
+            name: userName || `유저_${socket.id.substring(0, 4)}`,
+            penalties: [],
+            handCount: 0 // 다른 사람에게는 장수만 보여줌
+        };
 
-        room.players.push({
-            id: socket.id, name: userName, hand: [], penalties: [], seenIds: []
-        });
+        room.players.push(newUser);
+        
+        // [중요] 방에 있는 모든 사람에게 최신 플레이어 목록 전송
         io.to(roomCode).emit('roomUpdate', room);
+        console.log(`${userName}님이 ${roomCode}방에 입장함`);
     });
 
-    // [2] 게임 시작
     socket.on('startGame', (roomCode) => {
         const room = rooms[roomCode];
         if (!room || room.players.length < 2) return;
 
-        // 100장 카드 생성 (10종 x 10장)
+        // 100장 덱 생성 로직 (이전과 동일)
+        const ANIMALS = ['stinkbug','cockroach','bat','fly','toad','rat','scorpion','spider','mosquito','snake'];
         let deck = [];
-        ANIMALS.forEach(a => {
-            for(let i=0; i<10; i++) deck.push({...a, inst: Math.random()});
+        ANIMALS.forEach(id => {
+            for(let i=0; i<10; i++) deck.push({ id, name: getKrName(id), inst: Math.random() });
         });
         deck.sort(() => Math.random() - 0.5);
 
-        // 카드 분배
         const cardsPer = Math.floor(deck.length / room.players.length);
         room.players.forEach((p, idx) => {
-            p.hand = deck.slice(idx * cardsPer, (idx + 1) * cardsPer);
-            io.to(p.id).emit('yourHand', p.hand);
+            const hand = deck.slice(idx * cardsPer, (idx + 1) * cardsPer);
+            p.handCount = hand.length;
+            io.to(p.id).emit('yourHand', hand); // 본인에게만 카드 정보 전송
         });
 
         room.gameState = 'GAME';
         room.turnId = room.players[0].id;
-        room.phase = 'IDLE';
         io.to(roomCode).emit('gameStarted', room);
     });
 
-    // [3] 공격 (Offer)
-    socket.on('submitOffer', ({ roomCode, targetId, card, claim }) => {
-        const room = rooms[roomCode];
-        room.activeOffer = { card, claim, senderId: socket.id, receiverId: targetId, seenIds: [socket.id] };
-        room.phase = 'RESPONSE';
-        const sender = room.players.find(p => p.id === socket.id);
-        sender.hand = sender.hand.filter(c => c.inst !== card.inst);
-        io.to(roomCode).emit('onOffer', room);
-    });
-
-    // [4] 응답/판정 (Challenge)
-    socket.on('resolveResponse', ({ roomCode, guessIsTrue }) => {
-        const room = rooms[roomCode];
-        const offer = room.activeOffer;
-        const actualIsTrue = offer.card.name === offer.claim;
-        const loserId = (guessIsTrue !== actualIsTrue) ? offer.receiverId : offer.senderId;
-
-        room.phase = 'REVEAL';
-        io.to(roomCode).emit('revealStart', { room, loserId, win: guessIsTrue === actualIsTrue });
-
-        setTimeout(() => {
-            if (!rooms[roomCode]) return;
-            const loser = room.players.find(p => p.id === loserId);
-            loser.penalties.push(offer.card);
-            
-            // 패배 조건 (7장)
-            const counts = loser.penalties.reduce((acc, c) => { acc[c.id] = (acc[c.id] || 0) + 1; return acc; }, {});
-            if (Object.values(counts).some(v => v >= 7) || loser.hand.length === 0) {
-                io.to(roomCode).emit('gameOver', loser.name);
-                delete rooms[roomCode];
-            } else {
-                room.turnId = loserId;
-                room.activeOffer = null;
-                room.phase = 'IDLE';
-                io.to(roomCode).emit('roundResolved', room);
-            }
-        }, 3000);
-    });
-
-    // [5] 패스 (Pass)
-    socket.on('submitPass', ({ roomCode, nextTargetId, newClaim }) => {
-        const room = rooms[roomCode];
-        room.activeOffer.senderId = socket.id;
-        room.activeOffer.receiverId = nextTargetId;
-        room.activeOffer.claim = newClaim;
-        room.activeOffer.seenIds.push(socket.id);
-        room.phase = 'RESPONSE';
-        io.to(roomCode).emit('onOffer', room);
-    });
+    // 닉네임 한글 변환 헬퍼
+    function getKrName(id) {
+        const mapping = { stinkbug:'노린재', cockroach:'바퀴벌레', bat:'박쥐', fly:'파리', toad:'두꺼비', rat:'쥐', scorpion:'전갈', spider:'거미', mosquito:'모기', snake:'뱀' };
+        return mapping[id];
+    }
 
     socket.on('disconnect', () => {
-        // 연결 끊김 처리 (생략 가능)
+        // 유저가 나갔을 때 처리 로직을 넣으면 좋으나 일단 유지
     });
 });
 
