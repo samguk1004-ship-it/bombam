@@ -6,7 +6,6 @@ const cors = require('cors');
 const app = express();
 const server = http.createServer(app);
 
-// 모든 도메인 허용
 app.use(cors());
 
 const io = new Server(server, {
@@ -16,38 +15,51 @@ const io = new Server(server, {
     }
 });
 
-// 서버 상태 확인용
 app.get('/', (req, res) => {
-    res.send('<h1>서버 작동 중</h1>');
+    res.send('<h1>서버 가동 중</h1>');
 });
 
 let rooms = {};
 
 io.on('connection', (socket) => {
-    console.log('유저 접속:', socket.id);
+    console.log('접속:', socket.id);
 
+    // [조인 로직 수정]
     socket.on('joinRoom', ({ roomCode, userName }) => {
         if (!roomCode || !userName) return;
+
         socket.join(roomCode);
         
         if (!rooms[roomCode]) {
-            rooms[roomCode] = { code: roomCode, players: [], gameState: 'LOBBY' };
+            rooms[roomCode] = { 
+                code: roomCode, 
+                players: [], 
+                gameState: 'LOBBY' 
+            };
         }
-        
-        // 중복 추가 방지
+
         const room = rooms[roomCode];
-        if (!room.players.find(p => p.id === socket.id)) {
-            room.players.push({ id: socket.id, name: userName, penalties: [] });
-        }
         
-        console.log(`[${roomCode}] ${userName} 입장`);
+        // 중복 방지 (같은 소켓 ID가 있는지 확인)
+        const exists = room.players.find(p => p.id === socket.id);
+        if (!exists) {
+            room.players.push({
+                id: socket.id,
+                name: userName,
+                penalties: []
+            });
+        }
+
+        console.log(`${userName} 입장 -> ${roomCode}`);
+        
+        // 방에 있는 모든 클라이언트에게 업데이트된 방 정보 전송
         io.to(roomCode).emit('roomUpdate', room);
     });
 
     socket.on('disconnect', () => {
-        console.log('유저 나감');
+        // 유저가 나갔을 때 방 목록에서 제거하는 로직 (선택 사항)
     });
 });
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+server.listen(PORT, () => console.log(`Server on ${PORT}`));
