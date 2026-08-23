@@ -8,7 +8,6 @@ const server = http.createServer(app);
 
 app.use(cors());
 
-// 🟢 통신 충돌(400 에러) 방지를 위해 polling과 websocket 모두 허용하도록 수정됨
 const io = new Server(server, {
     cors: { origin: "*", methods: ["GET", "POST"], credentials: true },
     transports: ['polling', 'websocket'] 
@@ -74,11 +73,8 @@ io.on('connection', (socket) => {
 
         room.turnId = room.players[0].id;
 
-        room.players.forEach(p => {
-            p.handCount = p.hand.length;
-        });
+        room.players.forEach(p => { p.handCount = p.hand.length; });
 
-        console.log(`[방 ${roomCode}] 게임 시작! 카드 64장 분배 완료.`);
         io.to(roomCode).emit('gameStarted', room);
     });
 
@@ -116,6 +112,7 @@ io.on('connection', (socket) => {
         io.to(roomCode).emit('onOffer', room);
     });
 
+    // 👇 핵심 수정: 진실/거짓 판독 시 애니메이션(REVEAL) 딜레이 생성
     socket.on('resolveResponse', ({ roomCode, guessIsTrue }) => {
         const room = rooms[roomCode];
         if(!room || !room.activeOffer) return;
@@ -124,16 +121,33 @@ io.on('connection', (socket) => {
         const isTruth = (offer.card.name === offer.claim);
         const guessCorrect = (guessIsTrue === isTruth);
 
-        let penaltyReceiverId = guessCorrect ? offer.seenIds[offer.seenIds.length - 1] : socket.id;
-        
-        const penalizedPlayer = room.players.find(p => p.id === penaltyReceiverId);
-        if(penalizedPlayer) penalizedPlayer.penalties.push(offer.card);
+        const attackerId = offer.seenIds[offer.seenIds.length - 1];
+        let penaltyReceiverId = guessCorrect ? attackerId : socket.id;
 
-        room.turnId = penaltyReceiverId;
-        room.activeOffer = null;
-        room.phase = 'IDLE';
+        room.phase = 'REVEAL';
+        room.revealData = {
+            guessCorrect: guessCorrect,
+            actualCard: offer.card,
+            penaltyId: penaltyReceiverId
+        };
 
-        io.to(roomCode).emit('roundResolved', room);
+        // 전체 유저에게 카드 뒤집기 애니메이션을 재생하라고 신호 전달
+        io.to(roomCode).emit('revealStart', room);
+
+        // 4.5초 뒤에 카드를 벌칙칸에 넣고 다음 턴으로 전환
+        setTimeout(() => {
+            if (rooms[roomCode]) {
+                const penalizedPlayer = rooms[roomCode].players.find(p => p.id === penaltyReceiverId);
+                if(penalizedPlayer) penalizedPlayer.penalties.push(offer.card);
+
+                rooms[roomCode].turnId = penaltyReceiverId;
+                rooms[roomCode].activeOffer = null;
+                rooms[roomCode].revealData = null;
+                rooms[roomCode].phase = 'IDLE';
+
+                io.to(roomCode).emit('roundResolved', rooms[roomCode]);
+            }
+        }, 4500);
     });
 
     socket.on('disconnect', () => { console.log('🔴 유저 접속 종료:', socket.id); });
