@@ -42,8 +42,6 @@ const EXTENDED_ANIMALS = [
     { id: 'snake', name: '뱀', color: '#16a34a' }
 ];
 
-// 🌟 왕관을 쓴 이미지의 번호 (0~9 중 선택)
-// 현재 0번(예: 00.jpg, 10.jpg 등)을 왕카드로 설정해두었습니다.
 const ROYAL_IMG_INDEX = 0; 
 
 function generateDeck(playerCount) {
@@ -52,16 +50,9 @@ function generateDeck(playerCount) {
     let instId = 0;
     
     for (const animal of animals) {
-        // 왕카드 이미지 (설정된 인덱스)
         const royalImg = IMAGE_POOLS[animal.id][ROYAL_IMG_INDEX];
-        
-        // 왕카드를 제외한 나머지 9장의 일반 이미지들
         const normalImages = IMAGE_POOLS[animal.id].filter((_, idx) => idx !== ROYAL_IMG_INDEX);
-        
-        // 일반 이미지 9장 중 랜덤으로 7장만 뽑기
         const shuffledNormal = normalImages.sort(() => Math.random() - 0.5).slice(0, 7);
-        
-        // 왕카드 1장 + 뽑힌 일반 카드 7장 = 총 8장을 배열하고 섞기
         const selectedImages = [royalImg, ...shuffledNormal].sort(() => Math.random() - 0.5);
         
         for (let i = 0; i < 8; i++) {
@@ -71,7 +62,6 @@ function generateDeck(playerCount) {
             deck.push({ 
                 ...animal, 
                 baseName: animal.name,
-                // 왕카드면 뒤에 👑 아이콘만 추가
                 name: isRoyal ? `${animal.name} 👑` : animal.name,
                 isRoyal: isRoyal,
                 inst: `${animal.id}_${instId++}`,
@@ -215,7 +205,8 @@ io.on('connection', (socket) => {
                 if (penaltyPlayer) {
                     penaltyPlayer.penalties.push(offer.card);
                     
-                    if (offer.card.isRoyal && winnerPlayer && winnerPlayer.penalties.length > 0) {
+                    // 🌟 수정됨: 실제 카드가 왕카드인지 여부와 상관없이, "왕카드"라고 선언(claim)했을 때만 추가 벌칙 발동
+                    if (offer.claim === '왕카드' && winnerPlayer && winnerPlayer.penalties.length > 0) {
                         const randIdx = Math.floor(Math.random() * winnerPlayer.penalties.length);
                         const extraCard = winnerPlayer.penalties.splice(randIdx, 1)[0];
                         penaltyPlayer.penalties.push(extraCard);
