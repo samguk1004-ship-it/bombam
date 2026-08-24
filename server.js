@@ -12,32 +12,57 @@ const io = new Server(server, {
 
 const rooms = {};
 
+// 🌟 각 동물별 10장의 고유 이미지 URL 리스트
+const IMAGE_POOLS = {
+    spider: Array.from({length: 10}, (_, i) => `https://masi4882.dothome.co.kr/0${i}.jpg?v=2026`),
+    stinkbug: Array.from({length: 10}, (_, i) => `https://masi4882.dothome.co.kr/1${i}.jpg?v=2026`),
+    toad: Array.from({length: 10}, (_, i) => `https://masi4882.dothome.co.kr/2${i}.jpg?v=2026`),
+    cockroach: Array.from({length: 10}, (_, i) => `https://masi4882.dothome.co.kr/3${i}.jpg?v=2026`),
+    scorpion: Array.from({length: 10}, (_, i) => `https://masi4882.dothome.co.kr/4${i}.jpg?v=2026`),
+    bat: Array.from({length: 10}, (_, i) => `https://masi4882.dothome.co.kr/5${i}.jpg?v=2026`),
+    rat: Array.from({length: 10}, (_, i) => `https://masi4882.dothome.co.kr/6${i}.jpg?v=2026`),
+    fly: Array.from({length: 10}, (_, i) => `https://masi4882.dothome.co.kr/7${i}.jpg?v=2026`),
+    mosquito: Array.from({length: 10}, (_, i) => `https://masi4882.dothome.co.kr/8${i}.jpg?v=2026`),
+    snake: Array.from({length: 10}, (_, i) => `https://masi4882.dothome.co.kr/9${i}.jpg?v=2026`)
+};
+
 const BASE_ANIMALS = [
-    { id: 'cockroach', name: '바퀴벌레', color: '#78350f', img: 'https://masi4882.dothome.co.kr/30.jpg?v=2026' },
-    { id: 'bat', name: '박쥐', color: '#334155', img: 'https://masi4882.dothome.co.kr/50.jpg?v=2026' },
-    { id: 'fly', name: '파리', color: '#15803d', img: 'https://masi4882.dothome.co.kr/70.jpg?v=2026' },
-    { id: 'toad', name: '두꺼비', color: '#065f46', img: 'https://masi4882.dothome.co.kr/20.jpg?v=2026' },
-    { id: 'scorpion', name: '전갈', color: '#991b1b', img: 'https://masi4882.dothome.co.kr/40.jpg?v=2026' },
-    { id: 'rat', name: '쥐', color: '#57534e', img: 'https://masi4882.dothome.co.kr/60.jpg?v=2026' },
-    { id: 'spider', name: '거미', color: '#1e1b4b', img: 'https://masi4882.dothome.co.kr/00.jpg?v=2026' },
-    { id: 'stinkbug', name: '노린재', color: '#854d0e', img: 'https://masi4882.dothome.co.kr/10.jpg?v=2026' }
+    { id: 'cockroach', name: '바퀴벌레', color: '#78350f' },
+    { id: 'bat', name: '박쥐', color: '#334155' },
+    { id: 'fly', name: '파리', color: '#15803d' },
+    { id: 'toad', name: '두꺼비', color: '#065f46' },
+    { id: 'scorpion', name: '전갈', color: '#991b1b' },
+    { id: 'rat', name: '쥐', color: '#57534e' },
+    { id: 'spider', name: '거미', color: '#1e1b4b' },
+    { id: 'stinkbug', name: '노린재', color: '#854d0e' }
 ];
 
 const EXTENDED_ANIMALS = [
     ...BASE_ANIMALS,
-    { id: 'mosquito', name: '모기', color: '#dc2626', img: 'https://masi4882.dothome.co.kr/80.jpg?v=2026' },
-    { id: 'snake', name: '뱀', color: '#16a34a', img: 'https://masi4882.dothome.co.kr/90.jpg?v=2026' }
+    { id: 'mosquito', name: '모기', color: '#dc2626' },
+    { id: 'snake', name: '뱀', color: '#16a34a' }
 ];
 
 function generateDeck(playerCount) {
     let deck = [];
     const animals = playerCount >= 7 ? EXTENDED_ANIMALS : BASE_ANIMALS;
     let instId = 0;
+    
     for (const animal of animals) {
+        // 🌟 해당 동물의 10장 이미지를 랜덤으로 섞음
+        let shuffledImages = [...IMAGE_POOLS[animal.id]].sort(() => Math.random() - 0.5);
+        
+        // 🌟 섞인 이미지 중 딱 8장만 뽑아서 카드덱에 생성 (절대 중복 없음)
         for (let i = 0; i < 8; i++) {
-            deck.push({ ...animal, inst: `${animal.id}_${instId++}` });
+            deck.push({ 
+                ...animal, 
+                inst: `${animal.id}_${instId++}`,
+                img: shuffledImages[i] 
+            });
         }
     }
+    
+    // 전체 덱 섞기
     for (let i = deck.length - 1; i > 0; i--) {
         const j = Math.floor(Math.random() * (i + 1));
         [deck[i], deck[j]] = [deck[j], deck[i]];
@@ -173,44 +198,34 @@ io.on('connection', (socket) => {
         }, 4000); 
     });
 
-    // 🌟 이탈자 강력 대처 로직 추가 🌟
     socket.on('disconnect', () => {
         for (const roomCode in rooms) {
             const room = rooms[roomCode];
             const pIdx = room.players.findIndex(p => p.id === socket.id);
             
             if (pIdx !== -1) {
-                // 1. 해당 플레이어 방에서 제거
                 room.players.splice(pIdx, 1);
                 
-                // 2. 아무도 없으면 방 폭파
                 if (room.players.length === 0) {
                     delete rooms[roomCode];
                     continue;
                 }
                 
-                // 3. 게임 중 이탈 발생 시 처리
                 if (room.phase !== 'LOBBY' && room.phase !== 'GAME_OVER') {
                     if (room.players.length < 2) {
-                        // 1명 남으면 남은 사람 강제 승리 (게임 오버)
                         room.phase = 'GAME_OVER';
-                        room.loserId = socket.id; // 나간 사람을 패배자로 간주
+                        room.loserId = socket.id; 
                     } else {
-                        // 나간 사람이 현재 턴이었던 경우, 다음 사람으로 턴 넘기기
                         if (room.turnId === socket.id) {
                             room.turnId = room.players[pIdx % room.players.length].id;
                             room.phase = 'IDLE';
                             room.activeOffer = null;
-                        } 
-                        // 카드를 건네받고 있던 사람이 나간 경우, 공격자에게 다시 턴을 줌
-                        else if (room.activeOffer && room.activeOffer.receiverId === socket.id) {
+                        } else if (room.activeOffer && room.activeOffer.receiverId === socket.id) {
                             const senderId = room.activeOffer.seenIds[room.activeOffer.seenIds.length - 1];
                             room.turnId = senderId || room.players[0].id;
                             room.phase = 'IDLE';
                             room.activeOffer = null;
                         }
-                        
-                        // 인원수 감소에 따른 패배조건(룰) 실시간 재적용 및 체크
                         checkGameOver(room);
                     }
                 }
