@@ -114,13 +114,13 @@ io.on('connection', (socket) => {
         io.to(roomCode).emit('gameStarted', room);
     });
 
-    // 블러핑 후 공격 제안 제출 (안전한 데이터 처리 추가)
+    // 공격 제안 제출
     socket.on('submitOffer', ({ roomCode, targetId, card, claim }) => {
         const room = rooms[roomCode];
-        if (!room) return;
+        if (!room || !card) return;
 
         const attacker = room.players.find(p => p.id === socket.id);
-        if (!attacker || !card) return;
+        if (!attacker) return;
 
         // 손패에서 카드 제거
         attacker.hand = attacker.hand.filter(c => c.inst !== card.inst);
@@ -130,14 +130,14 @@ io.on('connection', (socket) => {
             attackerId: socket.id,
             receiverId: targetId,
             card: card,
-            claim: claim || card.name, // 방어 코드 추가
+            claim: claim || card.name,
             seenIds: [socket.id]
         };
 
         io.to(roomCode).emit('onOffer', room);
     });
 
-    // 넘기기 제안 제출
+    // 카드 넘기기(Pass) 제출 핸들러 (누락 방지 수정)
     socket.on('submitPass', ({ roomCode, nextTargetId, newClaim }) => {
         const room = rooms[roomCode];
         if (!room || !room.activeOffer) return;
