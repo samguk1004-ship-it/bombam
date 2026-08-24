@@ -5,7 +5,6 @@ const cors = require('cors');
 
 const app = express();
 app.use(cors());
-
 const server = http.createServer(app);
 const io = new Server(server, {
     cors: { origin: "*", methods: ["GET", "POST"] }
@@ -13,201 +12,212 @@ const io = new Server(server, {
 
 const rooms = {};
 
-const animalMap = {
-    'cockroach': '바퀴벌레', 'bat': '박쥐', 'fly': '파리', 'toad': '두꺼비',
-    'scorpion': '전갈', 'rat': '쥐', 'spider': '거미', 'stinkbug': '노린재',
-    'mosquito': '모기', 'snake': '뱀'
-};
+const BASE_ANIMALS = [
+    { id: 'cockroach', name: '바퀴벌레', color: '#78350f', img: 'https://masi4882.dothome.co.kr/30.jpg?v=2026' },
+    { id: 'bat', name: '박쥐', color: '#334155', img: 'https://masi4882.dothome.co.kr/50.jpg?v=2026' },
+    { id: 'fly', name: '파리', color: '#15803d', img: 'https://masi4882.dothome.co.kr/70.jpg?v=2026' },
+    { id: 'toad', name: '두꺼비', color: '#065f46', img: 'https://masi4882.dothome.co.kr/20.jpg?v=2026' },
+    { id: 'scorpion', name: '전갈', color: '#991b1b', img: 'https://masi4882.dothome.co.kr/40.jpg?v=2026' },
+    { id: 'rat', name: '쥐', color: '#57534e', img: 'https://masi4882.dothome.co.kr/60.jpg?v=2026' },
+    { id: 'spider', name: '거미', color: '#1e1b4b', img: 'https://masi4882.dothome.co.kr/00.jpg?v=2026' },
+    { id: 'stinkbug', name: '노린재', color: '#854d0e', img: 'https://masi4882.dothome.co.kr/10.jpg?v=2026' }
+];
 
-const BASE_ANIMALS = ['cockroach', 'bat', 'fly', 'toad', 'scorpion', 'rat', 'spider', 'stinkbug'];
-const EXTENDED_ANIMALS = [...BASE_ANIMALS, 'mosquito', 'snake'];
+const EXTENDED_ANIMALS = [
+    ...BASE_ANIMALS,
+    { id: 'mosquito', name: '모기', color: '#dc2626', img: 'https://masi4882.dothome.co.kr/80.jpg?v=2026' },
+    { id: 'snake', name: '뱀', color: '#16a34a', img: 'https://masi4882.dothome.co.kr/90.jpg?v=2026' }
+];
 
-// 🌟 15분(밀리초) 상수 정의
-const INACTIVITY_TIMEOUT_MS = 15 * 60 * 1000; 
+function generateDeck(playerCount) {
+    let deck = [];
+    const animals = playerCount >= 7 ? EXTENDED_ANIMALS : BASE_ANIMALS;
+    let instId = 0;
+    for (const animal of animals) {
+        for (let i = 0; i < 8; i++) {
+            deck.push({ ...animal, inst: `${animal.id}_${instId++}` });
+        }
+    }
+    for (let i = deck.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [deck[i], deck[j]] = [deck[j], deck[i]];
+    }
+    return deck;
+}
+
+function checkGameOver(room) {
+    const penaltyLimit = room.players.length >= 7 ? 3 : 4; 
+    let loser = null;
+
+    for (const p of room.players) {
+        if (p.hand.length === 0 && room.turnId === p.id) { loser = p.id; break; }
+        const counts = {};
+        for (const pen of p.penalties) {
+            counts[pen.id] = (counts[pen.id] || 0) + 1;
+            if (counts[pen.id] >= penaltyLimit) { loser = p.id; break; }
+        }
+        if (loser) break;
+    }
+
+    if (loser) {
+        room.phase = 'GAME_OVER';
+        room.loserId = loser;
+        return true;
+    }
+    return false;
+}
 
 io.on('connection', (socket) => {
-    console.log('User connected:', socket.id);
-
-    // 🌟 방치(잠수) 체크용 타이머 변수
-    let inactivityTimer;
-
-    // 🌟 타이머를 (재)시작하는 함수
-    const resetInactivityTimer = () => {
-        if (inactivityTimer) clearTimeout(inactivityTimer);
-        
-        inactivityTimer = setTimeout(() => {
-            console.log(`User ${socket.id} kicked due to inactivity (15 mins).`);
-            socket.emit('kicked_inactive'); // 클라이언트에 킥 당했음을 알림
-            socket.disconnect(true); // 강제 연결 종료
-        }, INACTIVITY_TIMEOUT_MS);
-    };
-
-    // 처음 연결되었을 때 타이머 시작
-    resetInactivityTimer();
-
-    // 🌟 클라이언트로부터 '어떤 이벤트든' 들어오면 타이머 초기화 (활동 확인)
-    socket.use((packet, next) => {
-        resetInactivityTimer();
-        next();
-    });
-
     socket.on('joinRoom', ({ roomCode, userName }) => {
-        socket.join(roomCode);
         if (!rooms[roomCode]) {
-            rooms[roomCode] = {
-                roomCode, players: [], phase: 'IDLE', turnId: null,
-                activeOffer: null, revealData: null, loserId: null
-            };
+            rooms[roomCode] = { phase: 'LOBBY', players: [], turnId: null, activeOffer: null, revealData: null };
         }
-        
         const room = rooms[roomCode];
-        if (!room.players.find(p => p.id === socket.id)) {
-            room.players.push({
-                id: socket.id, name: userName, ready: false,
-                hand: [], penalties: [], handCount: 0
-            });
-        }
+        
+        if (room.phase !== 'LOBBY') return socket.emit('error', '게임이 이미 진행 중입니다.');
+        if (room.players.length >= 8) return socket.emit('error', '방이 가득 찼습니다. (최대 8명)');
+        if (room.players.find(p => p.name === userName)) return socket.emit('error', '이미 존재하는 닉네임입니다.');
+
+        room.players.push({ id: socket.id, name: userName, ready: false, hand: [], penalties: [] });
+        socket.join(roomCode);
         io.to(roomCode).emit('roomUpdate', room);
     });
 
     socket.on('playerReady', ({ roomCode, ready }) => {
         const room = rooms[roomCode];
-        if (room) {
-            const player = room.players.find(p => p.id === socket.id);
-            if (player) player.ready = ready;
+        if (!room) return;
+        const player = room.players.find(p => p.id === socket.id);
+        if (player) {
+            player.ready = ready;
             io.to(roomCode).emit('roomUpdate', room);
         }
     });
 
     socket.on('startGame', (roomCode) => {
         const room = rooms[roomCode];
-        if (room) {
-            room.phase = 'IDLE';
-            
-            // 🌟 방장 우선이 아닌, 플레이어 중 랜덤으로 첫 턴을 지정합니다!
-            const randomStarterIndex = Math.floor(Math.random() * room.players.length);
-            room.turnId = room.players[randomStarterIndex].id;
-            
-            room.loserId = null;
-            
-            const isExtended = room.players.length >= 7;
-            const animalsToUse = isExtended ? EXTENDED_ANIMALS : BASE_ANIMALS;
-            
-            let deck = [];
-            animalsToUse.forEach(animalId => {
-                for (let i = 0; i < 8; i++) {
-                    deck.push({
-                        id: animalId,
-                        name: animalMap[animalId],
-                        inst: `${animalId}_${i}_${Math.random()}` 
-                    });
-                }
-            });
-
-            for (let i = deck.length - 1; i > 0; i--) {
-                const j = Math.floor(Math.random() * (i + 1));
-                [deck[i], deck[j]] = [deck[j], deck[i]];
-            }
-            
-            const cardsPerPlayer = Math.floor(deck.length / room.players.length);
-            
-            room.players.forEach((p, index) => {
-                p.hand = deck.slice(index * cardsPerPlayer, (index + 1) * cardsPerPlayer);
-                p.handCount = p.hand.length;
-                p.penalties = [];
-            });
-            
-            io.to(roomCode).emit('gameStarted', room);
+        if (!room || room.players[0].id !== socket.id) return; 
+        
+        const deck = generateDeck(room.players.length);
+        room.players.forEach(p => p.hand = []);
+        let dealIdx = 0;
+        while (deck.length > 0) {
+            room.players[dealIdx % room.players.length].hand.push(deck.pop());
+            dealIdx++;
         }
+        
+        room.phase = 'IDLE';
+        room.turnId = room.players[0].id;
+        io.to(roomCode).emit('gameStarted', room);
     });
 
     socket.on('submitOffer', ({ roomCode, targetId, card, claim }) => {
         const room = rooms[roomCode];
-        if (room) {
-            const attacker = room.players.find(p => p.id === socket.id);
-            if(attacker) {
-                attacker.hand = attacker.hand.filter(c => c.inst !== card.inst);
-                attacker.handCount = attacker.hand.length;
-            }
-            room.activeOffer = { card: card, claim: claim, receiverId: targetId, seenIds: [socket.id] };
-            room.phase = 'RESPONSE';
-            io.to(roomCode).emit('onOffer', room);
-        }
+        if (!room || room.turnId !== socket.id || room.phase !== 'IDLE') return;
+
+        const player = room.players.find(p => p.id === socket.id);
+        player.hand = player.hand.filter(c => c.inst !== card.inst);
+        
+        room.activeOffer = { card, claim, receiverId: targetId, seenIds: [socket.id] };
+        room.phase = 'RESPONSE';
+        io.to(roomCode).emit('onOffer', room);
     });
 
     socket.on('submitPass', ({ roomCode, nextTargetId, newClaim }) => {
         const room = rooms[roomCode];
-        if (room && room.activeOffer) {
-            room.activeOffer.seenIds.push(socket.id);
-            room.activeOffer.receiverId = nextTargetId;
-            room.activeOffer.claim = newClaim;
-            io.to(roomCode).emit('onOffer', room);
-        }
+        if (!room || room.phase !== 'RESPONSE' || room.activeOffer.receiverId !== socket.id) return;
+        
+        room.activeOffer.seenIds.push(socket.id);
+        room.activeOffer.receiverId = nextTargetId;
+        room.activeOffer.claim = newClaim;
+        
+        io.to(roomCode).emit('onOffer', room);
     });
 
     socket.on('resolveResponse', ({ roomCode, guessIsTrue }) => {
         const room = rooms[roomCode];
-        if (!room || !room.activeOffer) return;
+        if (!room || room.phase !== 'RESPONSE' || room.activeOffer.receiverId !== socket.id) return;
 
         const offer = room.activeOffer;
-        const actualCard = offer.card;
-        
-        let isActuallyTrue = (actualCard.id === offer.claim || actualCard.name === offer.claim);
+        const actualAnimal = offer.card.name;
+        const isActuallyTrue = (actualAnimal === offer.claim);
         const guessCorrect = (guessIsTrue === isActuallyTrue);
-
-        const attackerId = offer.seenIds[offer.seenIds.length - 1];
-        const receiverId = offer.receiverId;
-        const penaltyId = guessCorrect ? attackerId : receiverId;
-
-        room.phase = 'REVEAL';
-        room.revealData = { actualCard: actualCard, guessCorrect: guessCorrect, penaltyId: penaltyId };
         
+        const senderId = offer.seenIds[offer.seenIds.length - 1];
+        const penaltyId = guessCorrect ? senderId : socket.id;
+
+        room.revealData = {
+            guessCorrect,
+            actualCard: offer.card,
+            penaltyId: penaltyId
+        };
+        room.phase = 'REVEAL';
         io.to(roomCode).emit('revealStart', room);
 
         setTimeout(() => {
-            const penalizedPlayer = room.players.find(p => p.id === penaltyId);
-            let isGameOver = false;
-
-            if (penalizedPlayer) {
-                penalizedPlayer.penalties.push(actualCard);
-
-                const penaltyLimit = room.players.length >= 7 ? 3 : 4;
-                const cardCounts = {};
+            if (rooms[roomCode]) {
+                const r = rooms[roomCode];
+                const penaltyPlayer = r.players.find(p => p.id === penaltyId);
+                if (penaltyPlayer) penaltyPlayer.penalties.push(offer.card);
                 
-                penalizedPlayer.penalties.forEach(c => {
-                    cardCounts[c.id] = (cardCounts[c.id] || 0) + 1;
-                    if (cardCounts[c.id] >= penaltyLimit) {
-                        isGameOver = true;
-                    }
-                });
-
-                if (penalizedPlayer.hand.length === 0) {
-                    isGameOver = true;
+                r.activeOffer = null;
+                r.revealData = null;
+                r.turnId = penaltyId;
+                r.phase = 'IDLE';
+                
+                if (!checkGameOver(r)) {
+                    io.to(roomCode).emit('roundResolved', r);
+                } else {
+                    io.to(roomCode).emit('roomUpdate', r); 
                 }
             }
-
-            room.activeOffer = null;
-            room.revealData = null;
-
-            if (isGameOver) {
-                room.phase = 'GAME_OVER';
-                room.loserId = penaltyId;
-            } else {
-                room.turnId = penaltyId; 
-                room.phase = 'IDLE';
-            }
-
-            io.to(roomCode).emit('roundResolved', room);
-        }, 3500);
+        }, 4000); 
     });
 
+    // 🌟 이탈자 강력 대처 로직 추가 🌟
     socket.on('disconnect', () => {
-        if (inactivityTimer) clearTimeout(inactivityTimer); // 🌟 연결이 끊어지면 타이머도 삭제
-        console.log('User disconnected:', socket.id);
+        for (const roomCode in rooms) {
+            const room = rooms[roomCode];
+            const pIdx = room.players.findIndex(p => p.id === socket.id);
+            
+            if (pIdx !== -1) {
+                // 1. 해당 플레이어 방에서 제거
+                room.players.splice(pIdx, 1);
+                
+                // 2. 아무도 없으면 방 폭파
+                if (room.players.length === 0) {
+                    delete rooms[roomCode];
+                    continue;
+                }
+                
+                // 3. 게임 중 이탈 발생 시 처리
+                if (room.phase !== 'LOBBY' && room.phase !== 'GAME_OVER') {
+                    if (room.players.length < 2) {
+                        // 1명 남으면 남은 사람 강제 승리 (게임 오버)
+                        room.phase = 'GAME_OVER';
+                        room.loserId = socket.id; // 나간 사람을 패배자로 간주
+                    } else {
+                        // 나간 사람이 현재 턴이었던 경우, 다음 사람으로 턴 넘기기
+                        if (room.turnId === socket.id) {
+                            room.turnId = room.players[pIdx % room.players.length].id;
+                            room.phase = 'IDLE';
+                            room.activeOffer = null;
+                        } 
+                        // 카드를 건네받고 있던 사람이 나간 경우, 공격자에게 다시 턴을 줌
+                        else if (room.activeOffer && room.activeOffer.receiverId === socket.id) {
+                            const senderId = room.activeOffer.seenIds[room.activeOffer.seenIds.length - 1];
+                            room.turnId = senderId || room.players[0].id;
+                            room.phase = 'IDLE';
+                            room.activeOffer = null;
+                        }
+                        
+                        // 인원수 감소에 따른 패배조건(룰) 실시간 재적용 및 체크
+                        checkGameOver(room);
+                    }
+                }
+                io.to(roomCode).emit('roomUpdate', room);
+            }
+        }
     });
 });
 
-const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
-    console.log(`Server listening on port ${PORT}`);
-});
+server.listen(4000, () => console.log('Server running on port 4000'));
