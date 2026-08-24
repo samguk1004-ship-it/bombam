@@ -42,22 +42,40 @@ const EXTENDED_ANIMALS = [
     { id: 'snake', name: '뱀', color: '#16a34a' }
 ];
 
+// 🌟 왕관을 쓴 이미지의 번호 (0~9 중 선택)
+// 현재 0번(예: 00.jpg, 10.jpg 등)을 왕카드로 설정해두었습니다.
+const ROYAL_IMG_INDEX = 0; 
+
 function generateDeck(playerCount) {
     let deck = [];
     const animals = playerCount >= 7 ? EXTENDED_ANIMALS : BASE_ANIMALS;
     let instId = 0;
     
     for (const animal of animals) {
-        let shuffledImages = [...IMAGE_POOLS[animal.id]].sort(() => Math.random() - 0.5);
+        // 왕카드 이미지 (설정된 인덱스)
+        const royalImg = IMAGE_POOLS[animal.id][ROYAL_IMG_INDEX];
+        
+        // 왕카드를 제외한 나머지 9장의 일반 이미지들
+        const normalImages = IMAGE_POOLS[animal.id].filter((_, idx) => idx !== ROYAL_IMG_INDEX);
+        
+        // 일반 이미지 9장 중 랜덤으로 7장만 뽑기
+        const shuffledNormal = normalImages.sort(() => Math.random() - 0.5).slice(0, 7);
+        
+        // 왕카드 1장 + 뽑힌 일반 카드 7장 = 총 8장을 배열하고 섞기
+        const selectedImages = [royalImg, ...shuffledNormal].sort(() => Math.random() - 0.5);
+        
         for (let i = 0; i < 8; i++) {
-            // 🌟 0번째 카드는 '왕카드'로 지정
+            const currentImg = selectedImages[i];
+            const isRoyal = (currentImg === royalImg);
+            
             deck.push({ 
                 ...animal, 
                 baseName: animal.name,
-                name: i === 0 ? `👑 왕 ${animal.name}` : animal.name,
-                isRoyal: i === 0,
+                // 왕카드면 뒤에 👑 아이콘만 추가
+                name: isRoyal ? `${animal.name} 👑` : animal.name,
+                isRoyal: isRoyal,
                 inst: `${animal.id}_${instId++}`,
-                img: shuffledImages[i] 
+                img: currentImg 
             });
         }
     }
@@ -165,12 +183,11 @@ io.on('connection', (socket) => {
 
         const offer = room.activeOffer;
         
-        // 🌟 왕카드 룰 판정 로직
         let isActuallyTrue = false;
         if (offer.claim === '왕카드') {
-            isActuallyTrue = offer.card.isRoyal; // 왕카드라고 선언했을 땐 진짜 왕카드여야 진실
+            isActuallyTrue = offer.card.isRoyal;
         } else {
-            isActuallyTrue = (offer.card.baseName === offer.claim); // 그 외엔 동물이름만 맞으면 (왕이든 아니든) 진실
+            isActuallyTrue = (offer.card.baseName === offer.claim); 
         }
         
         const guessCorrect = (guessIsTrue === isActuallyTrue);
@@ -178,8 +195,8 @@ io.on('connection', (socket) => {
         const senderId = offer.seenIds[offer.seenIds.length - 1];
         const receiverId = socket.id;
         
-        const penaltyId = guessCorrect ? senderId : receiverId; // 패자
-        const winnerId = guessCorrect ? receiverId : senderId;  // 승자
+        const penaltyId = guessCorrect ? senderId : receiverId; 
+        const winnerId = guessCorrect ? receiverId : senderId;  
 
         room.revealData = {
             guessCorrect,
@@ -198,7 +215,6 @@ io.on('connection', (socket) => {
                 if (penaltyPlayer) {
                     penaltyPlayer.penalties.push(offer.card);
                     
-                    // 🌟 왕카드 추가 벌칙 룰: 실제 카드가 왕카드라면, 패자는 승자의 벌칙덱에서 1장 랜덤으로 더 가져감
                     if (offer.card.isRoyal && winnerPlayer && winnerPlayer.penalties.length > 0) {
                         const randIdx = Math.floor(Math.random() * winnerPlayer.penalties.length);
                         const extraCard = winnerPlayer.penalties.splice(randIdx, 1)[0];
