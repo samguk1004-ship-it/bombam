@@ -22,8 +22,34 @@ const animalMap = {
 const BASE_ANIMALS = ['cockroach', 'bat', 'fly', 'toad', 'scorpion', 'rat', 'spider', 'stinkbug'];
 const EXTENDED_ANIMALS = [...BASE_ANIMALS, 'mosquito', 'snake'];
 
+// 🌟 15분(밀리초) 상수 정의
+const INACTIVITY_TIMEOUT_MS = 15 * 60 * 1000; 
+
 io.on('connection', (socket) => {
     console.log('User connected:', socket.id);
+
+    // 🌟 방치(잠수) 체크용 타이머 변수
+    let inactivityTimer;
+
+    // 🌟 타이머를 (재)시작하는 함수
+    const resetInactivityTimer = () => {
+        if (inactivityTimer) clearTimeout(inactivityTimer);
+        
+        inactivityTimer = setTimeout(() => {
+            console.log(`User ${socket.id} kicked due to inactivity (15 mins).`);
+            socket.emit('kicked_inactive'); // 클라이언트에 킥 당했음을 알림
+            socket.disconnect(true); // 강제 연결 종료
+        }, INACTIVITY_TIMEOUT_MS);
+    };
+
+    // 처음 연결되었을 때 타이머 시작
+    resetInactivityTimer();
+
+    // 🌟 클라이언트로부터 '어떤 이벤트든' 들어오면 타이머 초기화 (활동 확인)
+    socket.use((packet, next) => {
+        resetInactivityTimer();
+        next();
+    });
 
     socket.on('joinRoom', ({ roomCode, userName }) => {
         socket.join(roomCode);
@@ -141,11 +167,9 @@ io.on('connection', (socket) => {
             if (penalizedPlayer) {
                 penalizedPlayer.penalties.push(actualCard);
 
-                // 🌟 게임 오버 판정 로직 추가 🌟
                 const penaltyLimit = room.players.length >= 7 ? 3 : 4;
                 const cardCounts = {};
                 
-                // 1. 동일한 카드 누적 체크 (2~6인: 4장, 7~8인: 3장)
                 penalizedPlayer.penalties.forEach(c => {
                     cardCounts[c.id] = (cardCounts[c.id] || 0) + 1;
                     if (cardCounts[c.id] >= penaltyLimit) {
@@ -153,7 +177,6 @@ io.on('connection', (socket) => {
                     }
                 });
 
-                // 2. 벌칙을 받고 다음 턴 시작 시 내야 할 카드가 0장일 때
                 if (penalizedPlayer.hand.length === 0) {
                     isGameOver = true;
                 }
@@ -175,6 +198,7 @@ io.on('connection', (socket) => {
     });
 
     socket.on('disconnect', () => {
+        if (inactivityTimer) clearTimeout(inactivityTimer); // 🌟 연결이 끊어지면 타이머도 삭제
         console.log('User disconnected:', socket.id);
     });
 });
