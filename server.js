@@ -188,28 +188,41 @@ io.on('connection', (socket) => {
         const penaltyId = guessCorrect ? senderId : receiverId; 
         const winnerId = guessCorrect ? receiverId : senderId;  
 
+        let extraCard = null;
+        const penaltyPlayer = room.players.find(p => p.id === penaltyId);
+        const winnerPlayer = room.players.find(p => p.id === winnerId);
+
+        // 🌟 여기서 미리 승자의 덱에서 추가 벌칙 카드를 빼둡니다. (클라이언트 화면에서 승자의 벌칙 카드가 즉시 줄어드는 효과)
+        if (penaltyPlayer) {
+            if (offer.claim === '왕카드' && winnerPlayer && winnerPlayer.penalties.length > 0) {
+                const randIdx = Math.floor(Math.random() * winnerPlayer.penalties.length);
+                extraCard = winnerPlayer.penalties.splice(randIdx, 1)[0];
+            }
+        }
+
         room.revealData = {
             guessCorrect,
             actualCard: offer.card,
-            penaltyId: penaltyId
+            penaltyId: penaltyId,
+            winnerId: winnerId,
+            extraCard: extraCard // 클라이언트에 추가 벌칙 카드 정보 전송
         };
+        
         room.phase = 'REVEAL';
         io.to(roomCode).emit('revealStart', room);
+
+        // 🌟 추가 벌칙이 있다면 애니메이션 재생을 위해 서버 턴 지연 시간을 7.5초로 늘립니다.
+        const resolveDelay = extraCard ? 7500 : 4000;
 
         setTimeout(() => {
             if (rooms[roomCode]) {
                 const r = rooms[roomCode];
-                const penaltyPlayer = r.players.find(p => p.id === penaltyId);
-                const winnerPlayer = r.players.find(p => p.id === winnerId);
-
-                if (penaltyPlayer) {
-                    penaltyPlayer.penalties.push(offer.card);
-                    
-                    // 🌟 수정됨: 실제 카드가 왕카드인지 여부와 상관없이, "왕카드"라고 선언(claim)했을 때만 추가 벌칙 발동
-                    if (offer.claim === '왕카드' && winnerPlayer && winnerPlayer.penalties.length > 0) {
-                        const randIdx = Math.floor(Math.random() * winnerPlayer.penalties.length);
-                        const extraCard = winnerPlayer.penalties.splice(randIdx, 1)[0];
-                        penaltyPlayer.penalties.push(extraCard);
+                const pPlayer = r.players.find(p => p.id === penaltyId);
+                
+                if (pPlayer) {
+                    pPlayer.penalties.push(offer.card);
+                    if (extraCard) {
+                        pPlayer.penalties.push(extraCard); // 패자에게 추가 카드 최종 적용
                     }
                 }
                 
@@ -224,7 +237,7 @@ io.on('connection', (socket) => {
                     io.to(roomCode).emit('roomUpdate', r); 
                 }
             }
-        }, 4000); 
+        }, resolveDelay); 
     });
 
     socket.on('disconnect', () => {
