@@ -30,7 +30,7 @@ io.on('connection', (socket) => {
         if (!rooms[roomCode]) {
             rooms[roomCode] = {
                 roomCode, players: [], phase: 'IDLE', turnId: null,
-                activeOffer: null, revealData: null
+                activeOffer: null, revealData: null, loserId: null
             };
         }
         
@@ -57,13 +57,12 @@ io.on('connection', (socket) => {
         const room = rooms[roomCode];
         if (room) {
             room.phase = 'IDLE';
-            room.turnId = room.players[0].id; // 방장이 선공
+            room.turnId = room.players[0].id;
+            room.loserId = null;
             
-            // 🌟 2~6인(8종 64장), 7~8인(10종 80장) 덱 생성 로직 적용
             const isExtended = room.players.length >= 7;
             const animalsToUse = isExtended ? EXTENDED_ANIMALS : BASE_ANIMALS;
             
-            // 동물별로 8장씩 덱에 추가
             let deck = [];
             animalsToUse.forEach(animalId => {
                 for (let i = 0; i < 8; i++) {
@@ -75,13 +74,11 @@ io.on('connection', (socket) => {
                 }
             });
 
-            // 덱 셔플 (Fisher-Yates)
             for (let i = deck.length - 1; i > 0; i--) {
                 const j = Math.floor(Math.random() * (i + 1));
                 [deck[i], deck[j]] = [deck[j], deck[i]];
             }
             
-            // 인원수에 맞게 카드 균등 분배 (나머지는 버려짐)
             const cardsPerPlayer = Math.floor(deck.length / room.players.length);
             
             room.players.forEach((p, index) => {
@@ -125,10 +122,7 @@ io.on('connection', (socket) => {
         const offer = room.activeOffer;
         const actualCard = offer.card;
         
-        let isActuallyTrue = false;
-        if (actualCard.id === offer.claim || actualCard.name === offer.claim) {
-            isActuallyTrue = true;
-        }
+        let isActuallyTrue = (actualCard.id === offer.claim || actualCard.name === offer.claim);
         const guessCorrect = (guessIsTrue === isActuallyTrue);
 
         const attackerId = offer.seenIds[offer.seenIds.length - 1];
@@ -142,14 +136,39 @@ io.on('connection', (socket) => {
 
         setTimeout(() => {
             const penalizedPlayer = room.players.find(p => p.id === penaltyId);
+            let isGameOver = false;
+
             if (penalizedPlayer) {
                 penalizedPlayer.penalties.push(actualCard);
+
+                // 🌟 게임 오버 판정 로직 추가 🌟
+                const penaltyLimit = room.players.length >= 7 ? 3 : 4;
+                const cardCounts = {};
+                
+                // 1. 동일한 카드 누적 체크 (2~6인: 4장, 7~8인: 3장)
+                penalizedPlayer.penalties.forEach(c => {
+                    cardCounts[c.id] = (cardCounts[c.id] || 0) + 1;
+                    if (cardCounts[c.id] >= penaltyLimit) {
+                        isGameOver = true;
+                    }
+                });
+
+                // 2. 벌칙을 받고 다음 턴 시작 시 내야 할 카드가 0장일 때
+                if (penalizedPlayer.hand.length === 0) {
+                    isGameOver = true;
+                }
             }
 
             room.activeOffer = null;
             room.revealData = null;
-            room.turnId = penaltyId; 
-            room.phase = 'IDLE';
+
+            if (isGameOver) {
+                room.phase = 'GAME_OVER';
+                room.loserId = penaltyId;
+            } else {
+                room.turnId = penaltyId; 
+                room.phase = 'IDLE';
+            }
 
             io.to(roomCode).emit('roundResolved', room);
         }, 3500);
