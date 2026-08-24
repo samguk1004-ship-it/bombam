@@ -114,22 +114,29 @@ io.on('connection', (socket) => {
         io.to(roomCode).emit('gameStarted', room);
     });
 
-    // 공격 제안 제출
+    // 공격 제안 제출 (동물 클릭 직후 호출되는 핵심 함수)
     socket.on('submitOffer', ({ roomCode, targetId, card, claim }) => {
         const room = rooms[roomCode];
-        if (!room || !card) return;
+        if (!room || !card || !targetId) return;
 
         const attacker = room.players.find(p => p.id === socket.id);
         if (!attacker) return;
 
-        // 손패에서 카드 제거
+        // 공격자의 손패에서 해당 카드 제거
         attacker.hand = attacker.hand.filter(c => c.inst !== card.inst);
         attacker.handCount = attacker.hand.length;
 
+        // 새로운 제안 객체 설정 및 phase를 RESPONSE로 변경
+        room.phase = 'RESPONSE';
         room.activeOffer = {
             attackerId: socket.id,
             receiverId: targetId,
-            card: card,
+            card: {
+                inst: card.inst,
+                id: card.id,
+                name: card.name,
+                color: card.color
+            },
             claim: claim || card.name,
             seenIds: [socket.id]
         };
@@ -137,10 +144,10 @@ io.on('connection', (socket) => {
         io.to(roomCode).emit('onOffer', room);
     });
 
-    // 카드 넘기기(Pass) 제출 핸들러 (누락 방지 수정)
+    // 카드 넘기기 제출 핸들러
     socket.on('submitPass', ({ roomCode, nextTargetId, newClaim }) => {
         const room = rooms[roomCode];
-        if (!room || !room.activeOffer) return;
+        if (!room || !room.activeOffer || !nextTargetId) return;
 
         const currentReceiverId = room.activeOffer.receiverId;
         if (!room.activeOffer.seenIds.includes(currentReceiverId)) {
