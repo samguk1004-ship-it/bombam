@@ -131,7 +131,10 @@ io.on('connection', (socket) => {
         }
         
         room.phase = 'IDLE';
-        room.turnId = room.players[0].id;
+        // 🌟 [수정 완료] 방장 고정이 아닌, 참가자 중 랜덤으로 첫 번째 턴 지정!
+        const randomIndex = Math.floor(Math.random() * room.players.length);
+        room.turnId = room.players[randomIndex].id;
+        
         io.to(roomCode).emit('gameStarted', room);
     });
 
