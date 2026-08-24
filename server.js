@@ -83,7 +83,11 @@ io.on('connection', (socket) => {
         const room = rooms[roomCode];
         if (room) {
             room.phase = 'IDLE';
-            room.turnId = room.players[0].id;
+            
+            // 🌟 방장 우선이 아닌, 플레이어 중 랜덤으로 첫 턴을 지정합니다!
+            const randomStarterIndex = Math.floor(Math.random() * room.players.length);
+            room.turnId = room.players[randomStarterIndex].id;
+            
             room.loserId = null;
             
             const isExtended = room.players.length >= 7;
