@@ -11,10 +11,8 @@ const io = new Server(server, {
     }
 });
 
-// 방 정보를 관리하는 객체
 const rooms = {};
 
-// 동물 데이터 정의 (클라이언트와 동일)
 const BASE_ANIMALS = [
     { id: 'cockroach', name: '바퀴벌레', color: '#78350f' },
     { id: 'bat', name: '박쥐', color: '#334155' },
@@ -35,7 +33,6 @@ const EXTENDED_ANIMALS = [
 io.on('connection', (socket) => {
     console.log(`사용자 접속: ${socket.id}`);
 
-    // 1. 방 입장 (Join Room)
     socket.on('joinRoom', ({ roomCode, userName }) => {
         socket.join(roomCode);
 
@@ -43,7 +40,7 @@ io.on('connection', (socket) => {
             rooms[roomCode] = {
                 roomCode,
                 players: [],
-                phase: 'LOBBY', // LOBBY, PLAYING, GAME_OVER
+                phase: 'LOBBY',
                 turnId: null,
                 activeOffer: null,
                 loserId: null
@@ -51,14 +48,12 @@ io.on('connection', (socket) => {
         }
 
         const room = rooms[roomCode];
-        
-        // 이미 방에 있는 유저인지 확인 후 추가 또는 갱신
         let player = room.players.find(p => p.id === socket.id);
         if (!player) {
             player = {
                 id: socket.id,
                 name: userName,
-                ready: false, // 기본 준비 상태 false
+                ready: false,
                 hand: [],
                 handCount: 0,
                 penalties: []
@@ -66,40 +61,33 @@ io.on('connection', (socket) => {
             room.players.push(player);
         }
 
-        // 방 전체에 변경된 상태 전송
         io.to(roomCode).emit('roomUpdate', room);
     });
 
-    // 2. 플레이어 준비 상태 토글 (핵심 수정 부분)
     socket.on('playerReady', ({ roomCode, ready }) => {
         const room = rooms[roomCode];
         if (!room) return;
 
         const player = room.players.find(p => p.id === socket.id);
         if (player) {
-            player.ready = ready; // 준비 상태 변경 반영
-            console.log(`플레이어 준비 상태 변경: ${player.name} -> ${ready ? '준비 완료' : '대기 중'}`);
+            player.ready = ready;
         }
 
-        // 방에 있는 모든 참가자에게 갱신된 방 정보를 즉시 브로드캐스트
         io.to(roomCode).emit('roomUpdate', room);
     });
 
-    // 3. 게임 시작
     socket.on('startGame', (roomCode) => {
         const room = rooms[roomCode];
         if (!room || room.players.length < 2) return;
 
         room.phase = 'PLAYING';
         
-        // 카드 덱 생성 및 분배 로직
         const animalList = room.players.length >= 7 ? EXTENDED_ANIMALS : BASE_ANIMALS;
         let deck = [];
         let instCounter = 1;
 
         animalList.forEach(animal => {
-            // 각 동물별 카드 장수 설정 (기본 8종 * 8장 = 64장 등)
-            const count = room.players.length >= 7 ? 8 : 8; 
+            const count = 8; 
             for (let i = 0; i < count; i++) {
                 deck.push({
                     inst: `card_${instCounter++}`,
@@ -110,10 +98,8 @@ io.on('connection', (socket) => {
             }
         });
 
-        // 덱 섞기 (Shuffle)
         deck.sort(() => Math.random() - 0.5);
 
-        // 플레이어들에게 카드 분배
         const cardsPerPlayer = Math.floor(deck.length / room.players.length);
         room.players.forEach((p, idx) => {
             p.hand = deck.slice(idx * cardsPerPlayer, (idx + 1) * cardsPerPlayer);
@@ -122,20 +108,19 @@ io.on('connection', (socket) => {
             p.ready = false;
         });
 
-        // 첫 번째 플레이어 턴 설정
         room.turnId = room.players[0].id;
         room.activeOffer = null;
 
         io.to(roomCode).emit('gameStarted', room);
     });
 
-    // 4. 공격 제안 제출 (카드 제시)
+    // 블러핑 후 공격 제안 제출 (안전한 데이터 처리 추가)
     socket.on('submitOffer', ({ roomCode, targetId, card, claim }) => {
         const room = rooms[roomCode];
         if (!room) return;
 
         const attacker = room.players.find(p => p.id === socket.id);
-        if (!attacker) return;
+        if (!attacker || !card) return;
 
         // 손패에서 카드 제거
         attacker.hand = attacker.hand.filter(c => c.inst !== card.inst);
@@ -145,31 +130,38 @@ io.on('connection', (socket) => {
             attackerId: socket.id,
             receiverId: targetId,
             card: card,
-            claim: claim,
+            claim: claim || card.name, // 방어 코드 추가
             seenIds: [socket.id]
         };
 
         io.to(roomCode).emit('onOffer', room);
     });
 
-    // 5. 응답 제출 (진실 또는 거짓 판단)
+    // 넘기기 제안 제출
+    socket.on('submitPass', ({ roomCode, nextTargetId, newClaim }) => {
+        const room = rooms[roomCode];
+        if (!room || !room.activeOffer) return;
+
+        const currentReceiverId = room.activeOffer.receiverId;
+        if (!room.activeOffer.seenIds.includes(currentReceiverId)) {
+            room.activeOffer.seenIds.push(currentReceiverId);
+        }
+
+        room.activeOffer.receiverId = nextTargetId;
+        room.activeOffer.claim = newClaim || room.activeOffer.claim;
+
+        io.to(roomCode).emit('onOffer', room);
+    });
+
     socket.on('resolveResponse', ({ roomCode, guessIsTrue }) => {
         const room = rooms[roomCode];
         if (!room || !room.activeOffer) return;
 
         const offer = room.activeOffer;
-        const receiver = room.players.find(p => p.id === room.id === offer.receiverId);
-        
-        const isActualTruth = offer.card.name === offer.claim;
+        const isActualTruth = (offer.card.name === offer.claim);
         const guessCorrect = (guessIsTrue === isActualTruth);
 
-        // 벌칙을 받을 사람 결정
-        let penaltyId = '';
-        if (guessCorrect) {
-            penaltyId = offer.attackerId; // 맞추면 공격자가 벌칙
-        } else {
-            penaltyId = offer.receiverId; // 틀리면 수비자가 벌칙
-        }
+        let penaltyId = guessCorrect ? offer.attackerId : offer.receiverId;
 
         const penaltyTarget = room.players.find(p => p.id === penaltyId);
         if (penaltyTarget) {
@@ -185,11 +177,8 @@ io.on('connection', (socket) => {
 
         io.to(roomCode).emit('revealStart', room);
 
-        // 잠시 후 다음 라운드로 전환 및 패배 조건 체크
         setTimeout(() => {
-            // 패배 조건 체크 (동일한 벌칙 카드 4장 또는 손패 0장)
             for (const p of room.players) {
-                // 동물별 카드 개수 체크
                 const counts = {};
                 p.penalties.forEach(c => {
                     counts[c.id] = (counts[c.id] || 0) + 1;
@@ -202,7 +191,7 @@ io.on('connection', (socket) => {
 
             if (room.phase !== 'GAME_OVER') {
                 room.phase = 'PLAYING';
-                room.turnId = penaltyId; // 벌칙을 받은 사람이 다음 턴 시작
+                room.turnId = penaltyId; 
                 room.activeOffer = null;
                 room.revealData = null;
             }
@@ -211,7 +200,6 @@ io.on('connection', (socket) => {
         }, 4000);
     });
 
-    // 6. 연결 해제 처리
     socket.on('disconnect', () => {
         console.log(`사용자 퇴장: ${socket.id}`);
         for (const roomCode in rooms) {
