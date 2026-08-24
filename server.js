@@ -13,12 +13,14 @@ const io = new Server(server, {
 
 const rooms = {};
 
-// 🌟 카드 이름 매핑 추가 (하드코딩 오류 해결)
 const animalMap = {
     'cockroach': '바퀴벌레', 'bat': '박쥐', 'fly': '파리', 'toad': '두꺼비',
     'scorpion': '전갈', 'rat': '쥐', 'spider': '거미', 'stinkbug': '노린재',
     'mosquito': '모기', 'snake': '뱀'
 };
+
+const BASE_ANIMALS = ['cockroach', 'bat', 'fly', 'toad', 'scorpion', 'rat', 'spider', 'stinkbug'];
+const EXTENDED_ANIMALS = [...BASE_ANIMALS, 'mosquito', 'snake'];
 
 io.on('connection', (socket) => {
     console.log('User connected:', socket.id);
@@ -57,17 +59,33 @@ io.on('connection', (socket) => {
             room.phase = 'IDLE';
             room.turnId = room.players[0].id; // 방장이 선공
             
-            const animals = ['cockroach', 'bat', 'fly', 'toad', 'scorpion', 'rat', 'spider', 'stinkbug'];
+            // 🌟 2~6인(8종 64장), 7~8인(10종 80장) 덱 생성 로직 적용
+            const isExtended = room.players.length >= 7;
+            const animalsToUse = isExtended ? EXTENDED_ANIMALS : BASE_ANIMALS;
             
-            room.players.forEach(p => {
-                p.hand = Array(8).fill(null).map((_, i) => {
-                    const randomAnimalId = animals[Math.floor(Math.random() * animals.length)];
-                    return {
-                        id: randomAnimalId,
-                        name: animalMap[randomAnimalId], // 🌟 "동물카드" 버그 수정 완료
-                        inst: `${p.id}_${i}_${Math.random()}` 
-                    };
-                });
+            // 동물별로 8장씩 덱에 추가
+            let deck = [];
+            animalsToUse.forEach(animalId => {
+                for (let i = 0; i < 8; i++) {
+                    deck.push({
+                        id: animalId,
+                        name: animalMap[animalId],
+                        inst: `${animalId}_${i}_${Math.random()}` 
+                    });
+                }
+            });
+
+            // 덱 셔플 (Fisher-Yates)
+            for (let i = deck.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [deck[i], deck[j]] = [deck[j], deck[i]];
+            }
+            
+            // 인원수에 맞게 카드 균등 분배 (나머지는 버려짐)
+            const cardsPerPlayer = Math.floor(deck.length / room.players.length);
+            
+            room.players.forEach((p, index) => {
+                p.hand = deck.slice(index * cardsPerPlayer, (index + 1) * cardsPerPlayer);
                 p.handCount = p.hand.length;
                 p.penalties = [];
             });
@@ -118,16 +136,14 @@ io.on('connection', (socket) => {
         const penaltyId = guessCorrect ? attackerId : receiverId;
 
         room.phase = 'REVEAL';
-        room.revealData = {
-            actualCard: actualCard, guessCorrect: guessCorrect, penaltyId: penaltyId
-        };
+        room.revealData = { actualCard: actualCard, guessCorrect: guessCorrect, penaltyId: penaltyId };
+        
         io.to(roomCode).emit('revealStart', room);
 
         setTimeout(() => {
             const penalizedPlayer = room.players.find(p => p.id === penaltyId);
             if (penalizedPlayer) {
                 penalizedPlayer.penalties.push(actualCard);
-                // 🌟 벌칙 4장 수집 시 게임 오버 판정 로직 추가 가능
             }
 
             room.activeOffer = null;
@@ -136,7 +152,7 @@ io.on('connection', (socket) => {
             room.phase = 'IDLE';
 
             io.to(roomCode).emit('roundResolved', room);
-        }, 3500); // 3.5초 애니메이션 대기
+        }, 3500);
     });
 
     socket.on('disconnect', () => {
