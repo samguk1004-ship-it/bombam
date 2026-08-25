@@ -9,7 +9,7 @@ app.use(cors());
 const server = http.createServer(app);
 const io = new Server(server, {
     cors: {
-        origin: "*", // 실제 배포 시에는 클라이언트 도메인으로 제한하는 것을 권장합니다.
+        origin: "*", 
         methods: ["GET", "POST"]
     }
 });
@@ -46,10 +46,15 @@ const broadcastRoom = (roomCode) => {
             const safeRoom = {
                 ...room,
                 players: room.players.map(p => ({
-                    ...p,
+                    id: p.id,
+                    userId: p.userId,
+                    name: p.name,
+                    ready: p.ready,
                     // 본인 카드만 보이고, 다른 사람 카드는 개수(handCount)만 보임
                     hand: p.id === socket.id ? p.hand : [],
-                    handCount: p.hand ? p.hand.length : 0
+                    handCount: p.hand ? p.hand.length : 0,
+                    penalties: p.penalties
+                    // 💡 removeTimer 객체는 클라이언트로 보내면 에러가 나므로 맵핑 과정에서 자연스럽게 제외됨
                 }))
             };
             socket.emit('roomUpdate', safeRoom);
@@ -85,9 +90,16 @@ io.on('connection', (socket) => {
         const existingPlayerIndex = room.players.findIndex(p => p.userId === userId);
         
         if (existingPlayerIndex !== -1) {
-            // 기존 플레이어가 튕겼다가 돌아온 경우 소켓 ID 업데이트
+            const player = room.players[existingPlayerIndex];
+            
+            // 💡 재접속 성공 시 방 퇴장(폭파) 타이머를 취소합니다.
+            if (player.removeTimer) {
+                clearTimeout(player.removeTimer);
+                player.removeTimer = null;
+            }
+
             console.log(`[RECONNECT] ${userName} reconnected to ${roomCode}`);
-            room.players[existingPlayerIndex].id = socket.id;
+            player.id = socket.id; // 소켓 ID 업데이트
             socket.join(roomCode);
             broadcastRoom(roomCode);
             return;
@@ -96,10 +108,8 @@ io.on('connection', (socket) => {
         // 💡 관전 모드 처리 로직
         if (room.phase !== 'LOBBY') {
             console.log(`[SPECTATOR] ${userName} joined ${roomCode} as spectator.`);
-            socket.join(roomCode); // 소켓 방에는 입장시키지만
-            // room.players 에는 추가하지 않음 (관전자로 취급)
+            socket.join(roomCode);
             
-            // 현재 방 상태를 전송하여 화면을 띄워줌
             const safeRoom = {
                 ...room,
                 players: room.players.map(p => ({ ...p, hand: [], handCount: p.hand ? p.hand.length : 0 }))
@@ -119,7 +129,8 @@ io.on('connection', (socket) => {
             name: userName,
             ready: false,
             hand: [],
-            penalties: []
+            penalties: [],
+            removeTimer: null // 삭제 타이머 객체 공간
         };
 
         room.players.push(newPlayer);
@@ -224,7 +235,7 @@ io.on('connection', (socket) => {
         const claim = room.activeOffer.claim;
         const attackerId = room.activeOffer.seenIds[room.activeOffer.seenIds.length - 1];
 
-        // 💡 예측 결과 계산 ('왕카드' 선언은 실제 카드와 다를 수밖에 없으므로 거짓(false)으로 취급됨)
+        // 예측 결과 계산
         const isActuallyTrue = (actualCard.name === claim);
         const guessCorrect = (guessIsTrue === isActuallyTrue);
 
@@ -242,9 +253,8 @@ io.on('connection', (socket) => {
         
         let extraCard = null;
 
-        // 💡 더블 페널티 룰렛 판정 로직 (왕카드 선언 시)
+        // 더블 페널티 룰렛 판정 로직 (왕카드 선언 시)
         if (claim === '왕카드' && winningPlayer.penalties.length > 0) {
-            // 승리자의 벌칙 덱에서 랜덤으로 한 장을 뽑아 패배자에게 전가
             const randomIndex = Math.floor(Math.random() * winningPlayer.penalties.length);
             extraCard = winningPlayer.penalties[randomIndex];
             winningPlayer.penalties.splice(randomIndex, 1);
@@ -290,14 +300,35 @@ io.on('connection', (socket) => {
             }
 
             broadcastRoom(roomCode);
-        }, extraCard ? 6500 : 4000); // 룰렛 애니메이션이 있으면 6.5초, 없으면 4초 대기
+        }, extraCard ? 6500 : 4000); 
     });
 
-    // 연결 종료 시 (임시 이탈)
+    // 💡 7. 사용자 연결 종료 및 빈 방 폭파 로직
     socket.on('disconnect', () => {
         console.log(`[DISCONNECT] User disconnected: ${socket.id}`);
-        // 클라이언트 재접속을 허용하기 위해 players 배열에서 당장 삭제하지 않고 그대로 둡니다.
-        // 추후 로비 상태일 때만 정리하거나 주기적으로 청소하는 로직을 추가할 수 있습니다.
+        
+        for (const roomCode in rooms) {
+            const room = rooms[roomCode];
+            const player = room.players.find(p => p.id === socket.id);
+            
+            if (player) {
+                // 1분(60초) 내 재접속 기능을 위해 배열에서 당장 지우지 않고 대기 타이머 생성
+                player.removeTimer = setTimeout(() => {
+                    // 1분이 지나도 안 돌아오면 유저를 명단에서 완전히 삭제
+                    room.players = room.players.filter(p => p.userId !== player.userId);
+                    console.log(`[LEAVE] ${player.name} 님이 1분 미접속으로 방(${roomCode})에서 제거되었습니다.`);
+                    
+                    // 💡 유저를 제거한 후 남은 인원이 아무도 없다면 방을 폭파시킵니다.
+                    if (room.players.length === 0) {
+                        console.log(`[DESTROY] 방(${roomCode})에 남은 인원이 없어 완전히 폭파되었습니다 💥`);
+                        delete rooms[roomCode];
+                    } else {
+                        // 남아있는 인원이 있다면 남은 사람들에게 인원 축소(퇴장) 내역 갱신
+                        broadcastRoom(roomCode);
+                    }
+                }, 60000); // 60,000ms = 1분
+            }
+        }
     });
 });
 
