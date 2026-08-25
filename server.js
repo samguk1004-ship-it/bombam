@@ -53,7 +53,7 @@ const broadcastRoom = (roomCode) => {
                     hand: p.id === socket.id ? p.hand : [],
                     handCount: p.hand ? p.hand.length : 0,
                     penalties: p.penalties,
-                    isReconnecting: p.isReconnecting // 💡 재접속 상태 추가
+                    isReconnecting: p.isReconnecting 
                 }))
             };
             socket.emit('roomUpdate', safeRoom);
@@ -97,7 +97,7 @@ io.on('connection', (socket) => {
 
             const oldId = player.id;
             player.id = socket.id; 
-            player.isReconnecting = false; // 💡 재접속 완료 처리
+            player.isReconnecting = false; 
 
             if (room.turnId === oldId) room.turnId = socket.id;
             if (room.loserId === oldId) room.loserId = socket.id;
@@ -332,8 +332,13 @@ io.on('connection', (socket) => {
             room.players.splice(pIndex, 1);
             console.log(`[LEAVE_EXPLICIT] ${player.name} 님이 방(${roomCode})에서 명시적으로 퇴장했습니다.`);
             
-            if (room.players.length === 0) {
-                console.log(`[DESTROY] 방(${roomCode})에 남은 인원이 없어 즉시 폭파되었습니다 💥`);
+            // 💡 [추가] 방에 남은 인원이 없거나, 남은 인원이 모두 오프라인(튕김) 상태면 즉시 폭파
+            const isAllDisconnected = room.players.length === 0 || room.players.every(p => p.isReconnecting);
+
+            if (isAllDisconnected) {
+                console.log(`[DESTROY] 방(${roomCode})에 활성 인원이 없어 즉시 폭파되었습니다 💥`);
+                // 폭파 전 남은 플레이어들의 타이머 모두 해제
+                room.players.forEach(p => { if (p.removeTimer) clearTimeout(p.removeTimer); });
                 delete rooms[roomCode];
             } else {
                 if (room.phase !== 'LOBBY' && room.phase !== 'GAME_OVER') {
@@ -383,8 +388,19 @@ io.on('connection', (socket) => {
             const player = room.players.find(p => p.id === socket.id);
             
             if (player) {
-                // 💡 튕김 즉시 재접속(일시정지) 상태로 전환하여 클라이언트에 알림
                 player.isReconnecting = true;
+
+                // 💡 [추가] 방 안의 "모든" 플레이어가 튕긴(오프라인) 상태인지 확인
+                const isAllDisconnected = room.players.every(p => p.isReconnecting);
+
+                if (isAllDisconnected) {
+                    console.log(`[DESTROY] 방(${roomCode})의 모든 플레이어가 접속을 끊어 즉시 폭파되었습니다 💥`);
+                    // 방 폭파 전 기존 타이머들 안전하게 제거
+                    room.players.forEach(p => { if (p.removeTimer) clearTimeout(p.removeTimer); });
+                    delete rooms[roomCode];
+                    continue; // 룸이 삭제되었으므로 아래 브로드캐스트 및 개별 삭제 타이머 로직 무시
+                }
+
                 broadcastRoom(roomCode);
 
                 const timeoutDuration = room.phase === 'LOBBY' ? 10000 : 60000;
@@ -396,8 +412,12 @@ io.on('connection', (socket) => {
                     room.players.splice(pIndex, 1);
                     console.log(`[LEAVE_TIMEOUT] ${player.name} 님이 미접속으로 방(${roomCode})에서 완전 퇴장되었습니다.`);
                     
-                    if (room.players.length === 0) {
-                        console.log(`[DESTROY] 방(${roomCode})에 남은 인원이 없어 폭파되었습니다 💥`);
+                    // 타이머 종료 시점에서도 남은 인원 상태 다시 체크하여 폭파 로직 보강
+                    const isAllDisconnectedNow = room.players.length === 0 || room.players.every(p => p.isReconnecting);
+                    
+                    if (isAllDisconnectedNow) {
+                        console.log(`[DESTROY] 방(${roomCode})에 활성 인원이 없어 폭파되었습니다 💥`);
+                        room.players.forEach(p => { if (p.removeTimer) clearTimeout(p.removeTimer); });
                         delete rooms[roomCode];
                     } else {
                         if (room.phase !== 'LOBBY' && room.phase !== 'GAME_OVER') {
