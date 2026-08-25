@@ -53,7 +53,8 @@ const broadcastRoom = (roomCode) => {
                     hand: p.id === socket.id ? p.hand : [],
                     handCount: p.hand ? p.hand.length : 0,
                     penalties: p.penalties,
-                    isReconnecting: p.isReconnecting 
+                    isReconnecting: p.isReconnecting,
+                    lastClaim: p.lastClaim // 💡 왕카드 연속 사용 체크용
                 }))
             };
             socket.emit('roomUpdate', safeRoom);
@@ -64,7 +65,7 @@ const broadcastRoom = (roomCode) => {
 io.on('connection', (socket) => {
     console.log(`[CONNECT] User connected: ${socket.id}`);
 
-    // 1. 방 입장 (관전 모드 및 재접속 처리 포함)
+    // 1. 방 입장
     socket.on('joinRoom', ({ roomCode, userName, userId }) => {
         if (!roomCode || !userName) {
             return socket.emit('joinError', '방 코드와 닉네임을 확인해주세요.');
@@ -84,12 +85,9 @@ io.on('connection', (socket) => {
 
         const room = rooms[roomCode];
 
-        // 재접속(Reconnect) 처리 로직
         const existingPlayerIndex = room.players.findIndex(p => p.userId === userId);
-        
         if (existingPlayerIndex !== -1) {
             const player = room.players[existingPlayerIndex];
-            
             if (player.removeTimer) {
                 clearTimeout(player.removeTimer);
                 player.removeTimer = null;
@@ -118,18 +116,13 @@ io.on('connection', (socket) => {
             return;
         }
 
-        // 닉네임 중복 검사
         const isNameTaken = room.players.some(p => p.name === userName);
         if (isNameTaken) {
-            console.log(`[BLOCKED] Duplicate name attempt: ${userName} in ${roomCode}`);
             return socket.emit('joinError', '이미 방에서 사용 중인 닉네임입니다. 다른 닉네임으로 변경 후 접속해주세요.');
         }
 
-        // 관전 모드 처리 로직
         if (room.phase !== 'LOBBY') {
-            console.log(`[SPECTATOR] ${userName} joined ${roomCode} as spectator.`);
             socket.join(roomCode);
-            
             const safeRoom = {
                 ...room,
                 players: room.players.map(p => ({ ...p, hand: [], handCount: p.hand ? p.hand.length : 0 }))
@@ -138,7 +131,6 @@ io.on('connection', (socket) => {
             return;
         }
 
-        // 정상적인 새 플레이어 입장
         if (room.players.length >= 8) {
             return socket.emit('joinError', '방의 최대 인원(8명)이 가득 찼습니다.');
         }
@@ -151,20 +143,18 @@ io.on('connection', (socket) => {
             hand: [],
             penalties: [],
             removeTimer: null,
-            isReconnecting: false
+            isReconnecting: false,
+            lastClaim: null
         };
 
         room.players.push(newPlayer);
         socket.join(roomCode);
-        console.log(`[JOIN] ${userName} joined ${roomCode}`);
         broadcastRoom(roomCode);
     });
 
-    // 2. 준비 토글
     socket.on('playerReady', ({ roomCode, ready }) => {
         const room = rooms[roomCode];
         if (!room || room.phase !== 'LOBBY') return;
-
         const player = room.players.find(p => p.id === socket.id);
         if (player) {
             player.ready = ready;
@@ -172,7 +162,6 @@ io.on('connection', (socket) => {
         }
     });
 
-    // 3. 게임 시작
     socket.on('startGame', (roomCode) => {
         const room = rooms[roomCode];
         if (!room || room.phase !== 'LOBBY') return;
@@ -198,42 +187,48 @@ io.on('connection', (socket) => {
         }
 
         room.phase = 'GAME';
+        room.turnId = room.players[Math.floor(Math.random() * room.players.length)].id;
         
-        const randomTurnIndex = Math.floor(Math.random() * room.players.length);
-        room.turnId = room.players[randomTurnIndex].id;
-        
-        room.players.forEach(p => p.penalties = []);
+        room.players.forEach(p => { p.penalties = []; p.lastClaim = null; });
 
         io.in(roomCode).emit('gameStarted', { phase: 'GAME' });
         broadcastRoom(roomCode);
     });
 
-    // 4. 카드 건네기 (공격)
     socket.on('submitOffer', ({ roomCode, targetId, card, claim }) => {
         const room = rooms[roomCode];
         if (!room || room.phase !== 'GAME' || room.turnId !== socket.id) return;
 
         const attacker = room.players.find(p => p.id === socket.id);
+        
+        // 💡 왕카드 연속 사용 금지 로직
+        if (claim === '왕카드' && attacker.lastClaim === '왕카드') {
+            return socket.emit('gameError', '왕은 연속으로 사용할수 없습니다.');
+        }
+
+        attacker.lastClaim = claim;
         attacker.hand = attacker.hand.filter(c => c.inst !== card.inst);
 
-        room.activeOffer = {
-            card: card,
-            claim: claim,
-            receiverId: targetId,
-            seenIds: [socket.id]
-        };
+        room.activeOffer = { card, claim, receiverId: targetId, seenIds: [socket.id] };
         room.phase = 'RESPONSE';
 
         io.in(roomCode).emit('onOffer', { phase: 'RESPONSE' });
         broadcastRoom(roomCode);
     });
 
-    // 5. 카드 넘기기 (패스)
     socket.on('submitPass', ({ roomCode, nextTargetId, newClaim }) => {
         const room = rooms[roomCode];
         if (!room || room.phase !== 'RESPONSE' || !room.activeOffer) return;
         if (room.activeOffer.receiverId !== socket.id) return;
 
+        const attacker = room.players.find(p => p.id === socket.id);
+        
+        // 💡 넘길때도 왕카드 연속 사용 금지 검사
+        if (newClaim === '왕카드' && attacker.lastClaim === '왕카드') {
+            return socket.emit('gameError', '왕은 연속으로 사용할수 없습니다.');
+        }
+
+        attacker.lastClaim = newClaim;
         room.activeOffer.seenIds.push(socket.id);
         room.activeOffer.claim = newClaim;
         room.activeOffer.receiverId = nextTargetId;
@@ -242,7 +237,6 @@ io.on('connection', (socket) => {
         broadcastRoom(roomCode);
     });
 
-    // 6. 진실/거짓 판정 로직
     socket.on('resolveResponse', ({ roomCode, guessIsTrue }) => {
         const room = rooms[roomCode];
         if (!room || room.phase !== 'RESPONSE' || !room.activeOffer) return;
@@ -257,11 +251,9 @@ io.on('connection', (socket) => {
 
         let penaltyId, winnerId;
         if (guessCorrect) {
-            penaltyId = attackerId; 
-            winnerId = socket.id;
+            penaltyId = attackerId; winnerId = socket.id;
         } else {
-            penaltyId = socket.id; 
-            winnerId = attackerId;
+            penaltyId = socket.id; winnerId = attackerId;
         }
 
         const penaltyPlayer = room.players.find(p => p.id === penaltyId);
@@ -278,13 +270,7 @@ io.on('connection', (socket) => {
 
         penaltyPlayer.penalties.push(actualCard);
 
-        room.revealData = {
-            guessCorrect,
-            actualCard,
-            winnerId,
-            penaltyId,
-            extraCard
-        };
+        room.revealData = { guessCorrect, actualCard, winnerId, penaltyId, extraCard };
         room.phase = 'REVEAL';
 
         io.in(roomCode).emit('revealStart', { phase: 'REVEAL' });
@@ -292,7 +278,6 @@ io.on('connection', (socket) => {
 
         setTimeout(() => {
             const penaltyLimit = room.players.length >= 7 ? 3 : 4;
-            
             const isPenaltyOver = penaltyPlayer.penalties.reduce((acc, card) => {
                 acc[card.id] = (acc[card.id] || 0) + 1;
                 return acc;
@@ -315,7 +300,6 @@ io.on('connection', (socket) => {
         }, extraCard ? 6500 : 4000); 
     });
 
-    // 7. 명시적 방 나가기 (나가기 버튼 클릭 시 즉각 처리)
     socket.on('leaveRoom', (roomCode) => {
         const room = rooms[roomCode];
         if (!room) return;
@@ -323,40 +307,33 @@ io.on('connection', (socket) => {
         const pIndex = room.players.findIndex(p => p.id === socket.id);
         if (pIndex !== -1) {
             const player = room.players[pIndex];
-            
-            if (player.removeTimer) {
-                clearTimeout(player.removeTimer);
-                player.removeTimer = null;
-            }
+            if (player.removeTimer) clearTimeout(player.removeTimer);
 
             room.players.splice(pIndex, 1);
-            console.log(`[LEAVE_EXPLICIT] ${player.name} 님이 방(${roomCode})에서 명시적으로 퇴장했습니다.`);
             
-            // 💡 [추가] 방에 남은 인원이 없거나, 남은 인원이 모두 오프라인(튕김) 상태면 즉시 폭파
             const isAllDisconnected = room.players.length === 0 || room.players.every(p => p.isReconnecting);
-
             if (isAllDisconnected) {
-                console.log(`[DESTROY] 방(${roomCode})에 활성 인원이 없어 즉시 폭파되었습니다 💥`);
-                // 폭파 전 남은 플레이어들의 타이머 모두 해제
                 room.players.forEach(p => { if (p.removeTimer) clearTimeout(p.removeTimer); });
                 delete rooms[roomCode];
             } else {
                 if (room.phase !== 'LOBBY' && room.phase !== 'GAME_OVER') {
                     let turnFixed = false;
+                    const getRandomPlayerId = () => room.players.length > 0 ? room.players[Math.floor(Math.random() * room.players.length)].id : null;
+
                     if (room.turnId === player.id) {
-                        room.turnId = room.players[0].id;
+                        room.turnId = getRandomPlayerId();
                         turnFixed = true;
                     }
                     if (room.activeOffer && (room.activeOffer.receiverId === player.id || room.activeOffer.seenIds.includes(player.id))) {
                         room.activeOffer = null;
                         room.phase = 'GAME';
-                        room.turnId = room.players[0].id;
+                        room.turnId = getRandomPlayerId();
                         turnFixed = true;
                     }
                     if (room.phase === 'REVEAL' && room.revealData && (room.revealData.penaltyId === player.id || room.revealData.winnerId === player.id)) {
                         room.revealData = null;
                         room.phase = 'GAME';
-                        room.turnId = room.players[0].id;
+                        room.turnId = getRandomPlayerId();
                         turnFixed = true;
                     }
 
@@ -365,11 +342,11 @@ io.on('connection', (socket) => {
                         room.turnId = null;
                         room.activeOffer = null;
                         room.revealData = null;
-                        room.players.forEach(p => { p.ready = false; p.hand = []; p.penalties = []; p.isReconnecting = false; });
+                        room.players.forEach(p => { p.ready = false; p.hand = []; p.penalties = []; p.isReconnecting = false; p.lastClaim = null; });
                         io.in(roomCode).emit('gameError', `[알림] 진행 가능한 최소 인원(2명)이 부족하여 방이 로비로 리셋되었습니다.`);
                     } else {
                         const msg = turnFixed 
-                            ? `[알림] 턴을 진행 중이던 ${player.name} 님이 퇴장하여, 진행 중이던 공방이 취소되고 방장부터 턴이 재개됩니다.`
+                            ? `[알림] 턴을 진행 중이던 ${player.name} 님이 퇴장하여, 진행 중이던 공방이 취소되고 무작위 플레이어에게 턴이 넘어갑니다.`
                             : `[알림] ${player.name} 님이 퇴장했습니다. 남은 인원만으로 계속 진행합니다!`;
                         io.in(roomCode).emit('gameError', msg);
                     }
@@ -379,30 +356,22 @@ io.on('connection', (socket) => {
         }
     });
 
-    // 8. 사용자 연결 종료 (창 닫기, 새로고침, 네트워크 끊김 등)
     socket.on('disconnect', () => {
-        console.log(`[DISCONNECT] User disconnected: ${socket.id}`);
-        
         for (const roomCode in rooms) {
             const room = rooms[roomCode];
             const player = room.players.find(p => p.id === socket.id);
             
             if (player) {
                 player.isReconnecting = true;
-
-                // 💡 [추가] 방 안의 "모든" 플레이어가 튕긴(오프라인) 상태인지 확인
                 const isAllDisconnected = room.players.every(p => p.isReconnecting);
 
                 if (isAllDisconnected) {
-                    console.log(`[DESTROY] 방(${roomCode})의 모든 플레이어가 접속을 끊어 즉시 폭파되었습니다 💥`);
-                    // 방 폭파 전 기존 타이머들 안전하게 제거
                     room.players.forEach(p => { if (p.removeTimer) clearTimeout(p.removeTimer); });
                     delete rooms[roomCode];
-                    continue; // 룸이 삭제되었으므로 아래 브로드캐스트 및 개별 삭제 타이머 로직 무시
+                    continue; 
                 }
 
                 broadcastRoom(roomCode);
-
                 const timeoutDuration = room.phase === 'LOBBY' ? 10000 : 60000;
                 
                 player.removeTimer = setTimeout(() => {
@@ -410,33 +379,30 @@ io.on('connection', (socket) => {
                     if (pIndex === -1) return;
 
                     room.players.splice(pIndex, 1);
-                    console.log(`[LEAVE_TIMEOUT] ${player.name} 님이 미접속으로 방(${roomCode})에서 완전 퇴장되었습니다.`);
-                    
-                    // 타이머 종료 시점에서도 남은 인원 상태 다시 체크하여 폭파 로직 보강
                     const isAllDisconnectedNow = room.players.length === 0 || room.players.every(p => p.isReconnecting);
                     
                     if (isAllDisconnectedNow) {
-                        console.log(`[DESTROY] 방(${roomCode})에 활성 인원이 없어 폭파되었습니다 💥`);
                         room.players.forEach(p => { if (p.removeTimer) clearTimeout(p.removeTimer); });
                         delete rooms[roomCode];
                     } else {
                         if (room.phase !== 'LOBBY' && room.phase !== 'GAME_OVER') {
                             let turnFixed = false;
+                            const getRandomPlayerId = () => room.players.length > 0 ? room.players[Math.floor(Math.random() * room.players.length)].id : null;
                             
                             if (room.turnId === player.id) {
-                                room.turnId = room.players[0].id;
+                                room.turnId = getRandomPlayerId();
                                 turnFixed = true;
                             }
                             if (room.activeOffer && (room.activeOffer.receiverId === player.id || room.activeOffer.seenIds.includes(player.id))) {
                                 room.activeOffer = null;
                                 room.phase = 'GAME';
-                                room.turnId = room.players[0].id;
+                                room.turnId = getRandomPlayerId();
                                 turnFixed = true;
                             }
                             if (room.phase === 'REVEAL' && room.revealData && (room.revealData.penaltyId === player.id || room.revealData.winnerId === player.id)) {
                                 room.revealData = null;
                                 room.phase = 'GAME';
-                                room.turnId = room.players[0].id;
+                                room.turnId = getRandomPlayerId();
                                 turnFixed = true;
                             }
 
@@ -445,18 +411,18 @@ io.on('connection', (socket) => {
                                 room.turnId = null;
                                 room.activeOffer = null;
                                 room.revealData = null;
-                                room.players.forEach(p => { p.ready = false; p.hand = []; p.penalties = []; p.isReconnecting = false; });
+                                room.players.forEach(p => { p.ready = false; p.hand = []; p.penalties = []; p.isReconnecting = false; p.lastClaim = null; });
                                 io.in(roomCode).emit('gameError', `[알림] 진행 가능한 최소 인원(2명)이 부족하여 방이 로비로 리셋되었습니다.`);
                             } else {
                                 const msg = turnFixed 
-                                    ? `[알림] 턴을 진행 중이던 ${player.name} 님이 퇴장하여, 진행 중이던 공방이 취소되고 방장부터 턴이 재개됩니다.`
+                                    ? `[알림] 턴을 진행 중이던 ${player.name} 님이 미접속으로 1분이 경과하여 퇴장되었습니다. 턴이 리셋됩니다.`
                                     : `[알림] ${player.name} 님이 미접속으로 퇴장했습니다. 남은 인원만으로 계속 진행합니다!`;
                                 io.in(roomCode).emit('gameError', msg);
                             }
                         }
                         broadcastRoom(roomCode);
                     }
-                }, timeoutDuration); // 1분간 대기
+                }, timeoutDuration);
             }
         }
     });
