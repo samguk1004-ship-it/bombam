@@ -52,7 +52,8 @@ const broadcastRoom = (roomCode) => {
                     ready: p.ready,
                     hand: p.id === socket.id ? p.hand : [],
                     handCount: p.hand ? p.hand.length : 0,
-                    penalties: p.penalties
+                    penalties: p.penalties,
+                    isReconnecting: p.isReconnecting // 💡 재접속 상태 추가
                 }))
             };
             socket.emit('roomUpdate', safeRoom);
@@ -96,6 +97,7 @@ io.on('connection', (socket) => {
 
             const oldId = player.id;
             player.id = socket.id; 
+            player.isReconnecting = false; // 💡 재접속 완료 처리
 
             if (room.turnId === oldId) room.turnId = socket.id;
             if (room.loserId === oldId) room.loserId = socket.id;
@@ -148,7 +150,8 @@ io.on('connection', (socket) => {
             ready: false,
             hand: [],
             penalties: [],
-            removeTimer: null
+            removeTimer: null,
+            isReconnecting: false
         };
 
         room.players.push(newPlayer);
@@ -196,7 +199,6 @@ io.on('connection', (socket) => {
 
         room.phase = 'GAME';
         
-        // 💡 랜덤 선 플레이어 지정
         const randomTurnIndex = Math.floor(Math.random() * room.players.length);
         room.turnId = room.players[randomTurnIndex].id;
         
@@ -358,7 +360,7 @@ io.on('connection', (socket) => {
                         room.turnId = null;
                         room.activeOffer = null;
                         room.revealData = null;
-                        room.players.forEach(p => { p.ready = false; p.hand = []; p.penalties = []; });
+                        room.players.forEach(p => { p.ready = false; p.hand = []; p.penalties = []; p.isReconnecting = false; });
                         io.in(roomCode).emit('gameError', `[알림] 진행 가능한 최소 인원(2명)이 부족하여 방이 로비로 리셋되었습니다.`);
                     } else {
                         const msg = turnFixed 
@@ -372,7 +374,7 @@ io.on('connection', (socket) => {
         }
     });
 
-    // 8. 사용자 연결 종료 (창 닫기, 새로고침 등)
+    // 8. 사용자 연결 종료 (창 닫기, 새로고침, 네트워크 끊김 등)
     socket.on('disconnect', () => {
         console.log(`[DISCONNECT] User disconnected: ${socket.id}`);
         
@@ -381,6 +383,10 @@ io.on('connection', (socket) => {
             const player = room.players.find(p => p.id === socket.id);
             
             if (player) {
+                // 💡 튕김 즉시 재접속(일시정지) 상태로 전환하여 클라이언트에 알림
+                player.isReconnecting = true;
+                broadcastRoom(roomCode);
+
                 const timeoutDuration = room.phase === 'LOBBY' ? 10000 : 60000;
                 
                 player.removeTimer = setTimeout(() => {
@@ -419,7 +425,7 @@ io.on('connection', (socket) => {
                                 room.turnId = null;
                                 room.activeOffer = null;
                                 room.revealData = null;
-                                room.players.forEach(p => { p.ready = false; p.hand = []; p.penalties = []; });
+                                room.players.forEach(p => { p.ready = false; p.hand = []; p.penalties = []; p.isReconnecting = false; });
                                 io.in(roomCode).emit('gameError', `[알림] 진행 가능한 최소 인원(2명)이 부족하여 방이 로비로 리셋되었습니다.`);
                             } else {
                                 const msg = turnFixed 
@@ -430,7 +436,7 @@ io.on('connection', (socket) => {
                         }
                         broadcastRoom(roomCode);
                     }
-                }, timeoutDuration);
+                }, timeoutDuration); // 1분간 대기
             }
         }
     });
