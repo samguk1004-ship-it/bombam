@@ -55,7 +55,6 @@ function resolveResponseLogic(room, roomCode, guessIsTrue) {
 
     loser.penalties.push(card);
     
-    // 💡 TTS 판독을 위해 claim을 revealData에 포함
     room.revealData = { guessCorrect, actualCard: card, winnerId, penaltyId, extraCard, claim };
     room.phase = 'REVEAL';
     io.to(roomCode).emit('revealStart', sanitizeRoom(room));
@@ -183,9 +182,8 @@ io.on('connection', (socket) => {
                 } else {
                     p.isReconnecting = true;
                     p.disconnectTime = Date.now();
-                    room.lastDisconnectTime = Date.now(); // 💡 전체 타이머 리셋 트리거용
+                    room.lastDisconnectTime = Date.now(); 
 
-                    // 💡 방 안에 남은 모든 플레이어가 튕긴 상태라면 즉시 방 폭파
                     const allDisconnected = room.players.every(pl => pl.isReconnecting);
                     if (allDisconnected) {
                         room.players.forEach(pl => {
