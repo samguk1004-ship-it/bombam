@@ -70,7 +70,6 @@ io.on('connection', (socket) => {
         }
 
         if (!rooms[roomCode]) {
-            // 방이 없으면 새로 생성
             rooms[roomCode] = {
                 code: roomCode,
                 phase: 'LOBBY',
@@ -85,7 +84,6 @@ io.on('connection', (socket) => {
         const room = rooms[roomCode];
 
         // 💡 1. 재접속(Reconnect) 처리 로직
-        // 본인의 고유 세션 ID(userId)가 이미 방에 존재한다면 무조건 본인의 재접속으로 처리
         const existingPlayerIndex = room.players.findIndex(p => p.userId === userId);
         
         if (existingPlayerIndex !== -1) {
@@ -97,22 +95,37 @@ io.on('connection', (socket) => {
                 player.removeTimer = null;
             }
 
-            console.log(`[RECONNECT] ${player.name} reconnected to ${roomCode}`);
+            const oldId = player.id;
             player.id = socket.id; // 새 소켓 ID로 업데이트
+
+            // 💡 [핵심 버그 픽스] 게임 상태에 기록된 모든 옛날 ID를 새 ID로 교체합니다.
+            if (room.turnId === oldId) room.turnId = socket.id;
+            if (room.loserId === oldId) room.loserId = socket.id;
+            if (room.activeOffer) {
+                if (room.activeOffer.receiverId === oldId) room.activeOffer.receiverId = socket.id;
+                if (room.activeOffer.seenIds) {
+                    room.activeOffer.seenIds = room.activeOffer.seenIds.map(id => id === oldId ? socket.id : id);
+                }
+            }
+            if (room.revealData) {
+                if (room.revealData.winnerId === oldId) room.revealData.winnerId = socket.id;
+                if (room.revealData.penaltyId === oldId) room.revealData.penaltyId = socket.id;
+            }
+
+            console.log(`[RECONNECT] ${player.name} reconnected to ${roomCode}`);
             socket.join(roomCode);
             broadcastRoom(roomCode);
-            return; // 재접속 처리를 완료했으므로 아래 로직은 무시함
+            return;
         }
 
-        // 💡 2. 닉네임 중복 검사 (재접속이 아닌 새로운 접속인 경우에만 체크)
-        // 방에 들어가 있는 플레이어 중 동일한 이름이 있는지 확인
+        // 2. 닉네임 중복 검사
         const isNameTaken = room.players.some(p => p.name === userName);
         if (isNameTaken) {
             console.log(`[BLOCKED] Duplicate name attempt: ${userName} in ${roomCode}`);
             return socket.emit('joinError', '이미 방에서 사용 중인 닉네임입니다. 다른 닉네임으로 변경 후 접속해주세요.');
         }
 
-        // 💡 3. 관전 모드 처리 로직
+        // 3. 관전 모드 처리 로직
         if (room.phase !== 'LOBBY') {
             console.log(`[SPECTATOR] ${userName} joined ${roomCode} as spectator.`);
             socket.join(roomCode);
@@ -125,19 +138,19 @@ io.on('connection', (socket) => {
             return;
         }
 
-        // 💡 4. 정상적인 새 플레이어 입장
+        // 4. 정상적인 새 플레이어 입장
         if (room.players.length >= 8) {
             return socket.emit('joinError', '방의 최대 인원(8명)이 가득 찼습니다.');
         }
 
         const newPlayer = {
             id: socket.id,
-            userId: userId, // 재접속 판별용 고유 ID
+            userId: userId,
             name: userName,
             ready: false,
             hand: [],
             penalties: [],
-            removeTimer: null // 삭제 타이머 객체 공간
+            removeTimer: null
         };
 
         room.players.push(newPlayer);
@@ -162,11 +175,8 @@ io.on('connection', (socket) => {
     socket.on('startGame', (roomCode) => {
         const room = rooms[roomCode];
         if (!room || room.phase !== 'LOBBY') return;
-
-        // 방장(첫 번째 플레이어)인지 확인
         if (room.players[0].id !== socket.id) return; 
 
-        // 덱 생성 및 셔플
         const baseSet = room.players.length >= 7 ? EXTENDED_ANIMALS : BASE_ANIMALS;
         let deck = [];
         baseSet.forEach(animal => {
@@ -175,22 +185,19 @@ io.on('connection', (socket) => {
             }
         });
 
-        // Fisher-Yates 셔플
         for (let i = deck.length - 1; i > 0; i--) {
             const j = Math.floor(Math.random() * (i + 1));
             [deck[i], deck[j]] = [deck[j], deck[i]];
         }
 
-        // 카드 분배
         let pIndex = 0;
         while (deck.length > 0) {
             room.players[pIndex].hand.push(deck.pop());
             pIndex = (pIndex + 1) % room.players.length;
         }
 
-        // 게임 상태 초기화
         room.phase = 'GAME';
-        room.turnId = room.players[0].id; // 방장부터 시작
+        room.turnId = room.players[0].id;
         room.players.forEach(p => p.penalties = []);
 
         io.in(roomCode).emit('gameStarted', { phase: 'GAME' });
@@ -203,14 +210,13 @@ io.on('connection', (socket) => {
         if (!room || room.phase !== 'GAME' || room.turnId !== socket.id) return;
 
         const attacker = room.players.find(p => p.id === socket.id);
-        // 제출한 카드를 손패에서 제거
         attacker.hand = attacker.hand.filter(c => c.inst !== card.inst);
 
         room.activeOffer = {
             card: card,
             claim: claim,
             receiverId: targetId,
-            seenIds: [socket.id] // 카드를 확인한 사람 목록 (최초 공격자 포함)
+            seenIds: [socket.id]
         };
         room.phase = 'RESPONSE';
 
@@ -222,7 +228,7 @@ io.on('connection', (socket) => {
     socket.on('submitPass', ({ roomCode, nextTargetId, newClaim }) => {
         const room = rooms[roomCode];
         if (!room || room.phase !== 'RESPONSE' || !room.activeOffer) return;
-        if (room.activeOffer.receiverId !== socket.id) return; // 수비자가 아니면 차단
+        if (room.activeOffer.receiverId !== socket.id) return;
 
         room.activeOffer.seenIds.push(socket.id);
         room.activeOffer.claim = newClaim;
@@ -242,16 +248,15 @@ io.on('connection', (socket) => {
         const claim = room.activeOffer.claim;
         const attackerId = room.activeOffer.seenIds[room.activeOffer.seenIds.length - 1];
 
-        // 예측 결과 계산
         const isActuallyTrue = (actualCard.name === claim);
         const guessCorrect = (guessIsTrue === isActuallyTrue);
 
         let penaltyId, winnerId;
         if (guessCorrect) {
-            penaltyId = attackerId; // 맞췄으므로 공격자가 먹음
+            penaltyId = attackerId; 
             winnerId = socket.id;
         } else {
-            penaltyId = socket.id; // 틀렸으므로 수비자가 먹음
+            penaltyId = socket.id; 
             winnerId = attackerId;
         }
 
@@ -260,7 +265,6 @@ io.on('connection', (socket) => {
         
         let extraCard = null;
 
-        // 더블 페널티 룰렛 판정 로직 (왕카드 선언 시)
         if (claim === '왕카드' && winningPlayer.penalties.length > 0) {
             const randomIndex = Math.floor(Math.random() * winningPlayer.penalties.length);
             extraCard = winningPlayer.penalties[randomIndex];
@@ -268,7 +272,6 @@ io.on('connection', (socket) => {
             penaltyPlayer.penalties.push(extraCard);
         }
 
-        // 이번 턴의 벌칙 카드 부여
         penaltyPlayer.penalties.push(actualCard);
 
         room.revealData = {
@@ -283,11 +286,9 @@ io.on('connection', (socket) => {
         io.in(roomCode).emit('revealStart', { phase: 'REVEAL' });
         broadcastRoom(roomCode);
 
-        // 연출 대기 후 라운드 정리 및 게임 오버 판정
         setTimeout(() => {
             const penaltyLimit = room.players.length >= 7 ? 3 : 4;
             
-            // 동일 벌칙 카드 한계 초과 여부 확인
             const isPenaltyOver = penaltyPlayer.penalties.reduce((acc, card) => {
                 acc[card.id] = (acc[card.id] || 0) + 1;
                 return acc;
@@ -301,7 +302,7 @@ io.on('connection', (socket) => {
                 room.loserId = penaltyPlayer.id;
             } else {
                 room.phase = 'GAME';
-                room.turnId = penaltyPlayer.id; // 벌칙을 먹은 사람이 다음 턴 선공
+                room.turnId = penaltyPlayer.id;
                 room.activeOffer = null;
                 room.revealData = null;
             }
@@ -319,21 +320,34 @@ io.on('connection', (socket) => {
             const player = room.players.find(p => p.id === socket.id);
             
             if (player) {
-                // 1분(60초) 내 재접속 기능을 위해 배열에서 당장 지우지 않고 대기 타이머 생성
                 player.removeTimer = setTimeout(() => {
-                    // 1분이 지나도 안 돌아오면 유저를 명단에서 완전히 삭제
-                    room.players = room.players.filter(p => p.userId !== player.userId);
-                    console.log(`[LEAVE] ${player.name} 님이 1분 미접속으로 방(${roomCode})에서 제거되었습니다.`);
+                    // 1분이 지나면 유저 색출
+                    const pIndex = room.players.findIndex(p => p.userId === player.userId);
+                    if (pIndex === -1) return;
+
+                    room.players.splice(pIndex, 1);
+                    console.log(`[LEAVE] ${player.name} 님이 1분 미접속으로 방(${roomCode})에서 퇴장되었습니다.`);
                     
-                    // 유저를 제거한 후 남은 인원이 아무도 없다면 방을 폭파시킵니다.
                     if (room.players.length === 0) {
-                        console.log(`[DESTROY] 방(${roomCode})에 남은 인원이 없어 완전히 폭파되었습니다 💥`);
+                        console.log(`[DESTROY] 방(${roomCode})에 남은 인원이 없어 폭파되었습니다 💥`);
                         delete rooms[roomCode];
                     } else {
-                        // 남아있는 인원이 있다면 남은 사람들에게 인원 축소(퇴장) 내역 갱신
+                        // 💡 [핵심 버그 픽스] 게임 중 누군가 1분 초과로 완전히 퇴장당하면 남은 사람들은 게임 불가하므로 로비로 강제 리셋
+                        if (room.phase !== 'LOBBY' && room.phase !== 'GAME_OVER') {
+                            room.phase = 'LOBBY';
+                            room.turnId = null;
+                            room.activeOffer = null;
+                            room.revealData = null;
+                            room.players.forEach(p => {
+                                p.ready = false;
+                                p.hand = [];
+                                p.penalties = [];
+                            });
+                            io.in(roomCode).emit('gameError', `[알림] ${player.name} 님이 미접속으로 퇴장되어 방이 로비로 리셋되었습니다.`);
+                        }
                         broadcastRoom(roomCode);
                     }
-                }, 60000); // 60,000ms = 1분
+                }, 60000); // 60초 (1분)
             }
         }
     });
