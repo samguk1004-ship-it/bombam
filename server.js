@@ -8,20 +8,20 @@ app.use(cors());
 const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: '*' } });
 
-// 💡 기본 동물 및 확장 동물 데이터
+// 💡 동물 번호(prefix) 부여 (0~9)
 const BASE_ANIMALS = [
-    { id: 'cockroach', name: '바퀴벌레', repImg: 'https://masi4882.dothome.co.kr/31.jpg?v=2026' },
-    { id: 'bat', name: '박쥐', repImg: 'https://masi4882.dothome.co.kr/51.jpg?v=2026' },
-    { id: 'fly', name: '파리', repImg: 'https://masi4882.dothome.co.kr/71.jpg?v=2026' },
-    { id: 'toad', name: '두꺼비', repImg: 'https://masi4882.dothome.co.kr/21.jpg?v=2026' },
-    { id: 'scorpion', name: '전갈', repImg: 'https://masi4882.dothome.co.kr/41.jpg?v=2026' },
-    { id: 'rat', name: '쥐', repImg: 'https://masi4882.dothome.co.kr/61.jpg?v=2026' },
-    { id: 'spider', name: '거미', repImg: 'https://masi4882.dothome.co.kr/01.jpg?v=2026' },
-    { id: 'stinkbug', name: '노린재', repImg: 'https://masi4882.dothome.co.kr/11.jpg?v=2026' }
+    { id: 'spider', name: '거미', prefix: '0' },
+    { id: 'stinkbug', name: '노린재', prefix: '1' },
+    { id: 'toad', name: '두꺼비', prefix: '2' },
+    { id: 'cockroach', name: '바퀴벌레', prefix: '3' },
+    { id: 'scorpion', name: '전갈', prefix: '4' },
+    { id: 'bat', name: '박쥐', prefix: '5' },
+    { id: 'rat', name: '쥐', prefix: '6' },
+    { id: 'fly', name: '파리', prefix: '7' }
 ];
 const EXTENDED_ANIMALS = [ ...BASE_ANIMALS, 
-    { id: 'mosquito', name: '모기', repImg: 'https://masi4882.dothome.co.kr/81.jpg?v=2026' }, 
-    { id: 'snake', name: '뱀', repImg: 'https://masi4882.dothome.co.kr/91.jpg?v=2026' } 
+    { id: 'mosquito', name: '모기', prefix: '8' }, 
+    { id: 'snake', name: '뱀', prefix: '9' } 
 ];
 
 const rooms = {};
@@ -77,19 +77,30 @@ io.on('connection', (socket) => {
         const room = rooms[roomCode];
         if (!room) return;
         
+        // 2~6인은 8종, 7~8인은 10종
         const animals = room.players.length >= 7 ? EXTENDED_ANIMALS : BASE_ANIMALS;
         let deck = [];
         let cardInst = 0;
         
-        // 💡 핵심: 일반 동물 카드 8장 + 진짜 왕카드 1장 섞어 생성 (동물별로)
+        // 💡 00~99 이미지 할당 및 왕카드(0번) 지정 로직
         animals.forEach(animal => {
-            for(let i=0; i<8; i++) {
-                deck.push({ inst: ++cardInst, id: animal.id, name: animal.name, isKing: false, img: animal.repImg, animalName: animal.name });
+            // 동물별로 8장의 카드를 생성 (0~7번 인덱스 사용)
+            for(let i = 0; i < 8; i++) {
+                const isKing = (i === 0); // 💡 수정 완료: 0번 카드가 왕카드!
+                const cardNumStr = `${animal.prefix}${i}`; // 예: "00", "01", "02"...
+                
+                deck.push({ 
+                    inst: ++cardInst, 
+                    id: isKing ? `${animal.id}_king` : animal.id, 
+                    name: isKing ? `왕 ${animal.name}` : animal.name, 
+                    isKing: isKing, 
+                    img: `https://masi4882.dothome.co.kr/${cardNumStr}.jpg?v=2026`, 
+                    animalName: animal.name 
+                });
             }
-            deck.push({ inst: ++cardInst, id: animal.id + '_king', name: `왕 ${animal.name}`, isKing: true, img: animal.repImg, animalName: animal.name });
         });
 
-        // 카드 섞기 (셔플)
+        // 카드 섞기
         for (let i = deck.length - 1; i > 0; i--) {
             const j = Math.floor(Math.random() * (i + 1));
             [deck[i], deck[j]] = [deck[j], deck[i]];
@@ -148,7 +159,6 @@ io.on('connection', (socket) => {
         const { card, claim, receiverId, seenIds } = room.activeOffer;
         const attackerId = seenIds[seenIds.length - 1]; 
         
-        // 💡 판정 로직: 왕카드를 "왕카드"라고 부르면 진실, "해당 동물"이라고 불러도 진실!
         let isTruth = false;
         if (claim === '왕카드') {
             isTruth = card.isKing;
@@ -185,14 +195,16 @@ io.on('connection', (socket) => {
             
             room.activeOffer = null;
             room.revealData = null;
-            room.turnId = penaltyId; // 진 사람이 다음 턴 선
+            room.turnId = penaltyId; 
             room.phase = 'IDLE';
 
+            // 💡 패배 조건 1: 인원수 비례 벌칙 개수 (7인이상은 3장, 이하는 4장)
             const penaltyLimit = room.players.length >= 7 ? 3 : 4;
             let isGameOver = false;
             let overLoserId = null;
 
             room.players.forEach(p => {
+                // 💡 패배 조건 2: 턴이 시작되었는데 내 손패가 0장일 때 패배
                 if (p.hand.length === 0 && room.turnId === p.id) {
                     isGameOver = true;
                     overLoserId = p.id;
