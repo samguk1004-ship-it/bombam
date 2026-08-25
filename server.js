@@ -24,11 +24,10 @@ const EXTENDED_ANIMALS = [ ...BASE_ANIMALS,
 ];
 
 const rooms = {};
-const disconnectTimeouts = {}; // 💡 60초 강제 퇴장 타이머 관리 객체
+const disconnectTimeouts = {};
 
 function sanitizeRoom(room) { return room; }
 
-// 💡 판정 및 게임 오버 공통 로직 분리 (재사용성 향상)
 function resolveResponseLogic(room, roomCode, guessIsTrue) {
     if (!room || !room.activeOffer) return;
 
@@ -56,7 +55,8 @@ function resolveResponseLogic(room, roomCode, guessIsTrue) {
 
     loser.penalties.push(card);
     
-    room.revealData = { guessCorrect, actualCard: card, winnerId, penaltyId, extraCard };
+    // 💡 TTS 판독을 위해 claim을 revealData에 포함
+    room.revealData = { guessCorrect, actualCard: card, winnerId, penaltyId, extraCard, claim };
     room.phase = 'REVEAL';
     io.to(roomCode).emit('revealStart', sanitizeRoom(room));
 
@@ -100,28 +100,25 @@ function resolveResponseLogic(room, roomCode, guessIsTrue) {
 io.on('connection', (socket) => {
     socket.on('joinRoom', ({ roomCode, userName, userId, isBot }) => {
         if (!rooms[roomCode]) {
-            rooms[roomCode] = { phase: 'LOBBY', players: [], spectators: [], turnId: null, activeOffer: null, revealData: null };
+            rooms[roomCode] = { phase: 'LOBBY', players: [], spectators: [], turnId: null, activeOffer: null, revealData: null, lastDisconnectTime: null };
         }
         const room = rooms[roomCode];
         
         let playerByUserId = room.players.find(p => p.userId === userId);
         let playerByName = room.players.find(p => p.name === userName);
 
-        // 💡 1. 닉네임 중복 방지 (본인의 재접속이 아닌데 같은 닉네임을 쓰는 경우)
         if (!playerByUserId && playerByName) {
             socket.emit('joinError', '이미 사용중인 닉네임입니다. 다른 닉네임을 사용해주세요.');
             return;
         }
 
         if (playerByUserId) {
-            // 💡 2. 재접속 시 식별자(ID) 완벽 동기화 로직
             const oldId = playerByUserId.id;
             const newId = socket.id;
             playerByUserId.id = newId;
             playerByUserId.isReconnecting = false;
             playerByUserId.disconnectTime = null;
 
-            // 게임 진행 중이던 상태값들 업데이트
             if (room.turnId === oldId) room.turnId = newId;
             if (room.activeOffer) {
                 if (room.activeOffer.receiverId === oldId) room.activeOffer.receiverId = newId;
@@ -134,13 +131,11 @@ io.on('connection', (socket) => {
                 if (room.revealData.penaltyId === oldId) room.revealData.penaltyId = newId;
             }
 
-            // 60초 강제 퇴장 타이머 정지
             if (disconnectTimeouts[userId]) {
                 clearTimeout(disconnectTimeouts[userId]);
                 delete disconnectTimeouts[userId];
             }
         } else {
-            // 💡 3. 난입 시 관전 모드로 분기
             if (room.phase !== 'LOBBY') {
                 if (!room.spectators) room.spectators = [];
                 room.spectators.push({ id: socket.id, name: userName });
@@ -149,7 +144,6 @@ io.on('connection', (socket) => {
                 return;
             }
 
-            // 정상적인 로비 신규 접속
             let player = { id: socket.id, userId, name: userName, isBot, ready: false, hand: [], penalties: [], lastClaim: '', isReconnecting: false };
             room.players.push(player);
         }
@@ -183,29 +177,40 @@ io.on('connection', (socket) => {
             if (pIndex !== -1) {
                 const p = room.players[pIndex];
                 if (room.phase === 'LOBBY') {
-                    // 로비에서는 즉각 퇴장
                     room.players.splice(pIndex, 1);
                     if (room.players.length === 0) delete rooms[code];
                     else io.to(code).emit('roomUpdate', sanitizeRoom(room));
                 } else {
-                    // 게임 중에는 재접속 대기 모드 돌입
                     p.isReconnecting = true;
                     p.disconnectTime = Date.now();
+                    room.lastDisconnectTime = Date.now(); // 💡 전체 타이머 리셋 트리거용
+
+                    // 💡 방 안에 남은 모든 플레이어가 튕긴 상태라면 즉시 방 폭파
+                    const allDisconnected = room.players.every(pl => pl.isReconnecting);
+                    if (allDisconnected) {
+                        room.players.forEach(pl => {
+                            if (disconnectTimeouts[pl.userId]) {
+                                clearTimeout(disconnectTimeouts[pl.userId]);
+                                delete disconnectTimeouts[pl.userId];
+                            }
+                        });
+                        delete rooms[code];
+                        return;
+                    }
+
                     io.to(code).emit('roomUpdate', sanitizeRoom(room));
 
-                    // 💡 4. 1분(60초) 내 재접속 실패 시 강제 퇴장 및 랜덤 턴 배분
                     disconnectTimeouts[p.userId] = setTimeout(() => {
                         const r = rooms[code];
                         if (!r) return;
                         const idx = r.players.findIndex(pl => pl.userId === p.userId);
                         if (idx !== -1) {
                             const kickedPlayer = r.players[idx];
-                            r.players.splice(idx, 1); // 배열에서 제거
+                            r.players.splice(idx, 1);
                             
                             if (r.phase !== 'GAME_OVER') {
                                 const isActive = r.turnId === kickedPlayer.id || (r.activeOffer && r.activeOffer.receiverId === kickedPlayer.id);
                                 
-                                // 기록에서 제외
                                 if (r.activeOffer && r.activeOffer.seenIds) {
                                     r.activeOffer.seenIds = r.activeOffer.seenIds.filter(id => id !== kickedPlayer.id);
                                 }
@@ -215,12 +220,10 @@ io.on('connection', (socket) => {
                                     r.revealData = null;
                                     r.phase = 'IDLE';
                                     if (r.players.length > 0) {
-                                        // 💡 남은 인원 중 랜덤하게 턴 부여
                                         r.turnId = r.players[Math.floor(Math.random() * r.players.length)].id;
                                     }
                                 }
                                 
-                                // 혼자 남았다면 게임 종료 처리
                                 if (r.players.length <= 1) {
                                     r.phase = 'GAME_OVER';
                                     r.loserId = kickedPlayer.id; 
@@ -316,19 +319,17 @@ io.on('connection', (socket) => {
         resolveResponseLogic(room, roomCode, guessIsTrue);
     });
 
-    // 💡 5. 클라이언트 0초 멈춤(프리징) 해결을 위한 강제 서버 스킵 로직
     socket.on('forceTurnSkip', ({ roomCode, targetId }) => {
         const room = rooms[roomCode];
         if (!room) return;
         
         const actingPlayerId = room.activeOffer ? room.activeOffer.receiverId : room.turnId;
-        if (actingPlayerId !== targetId) return; // 대상이 불일치하면 거부
+        if (actingPlayerId !== targetId) return; 
 
         const targetPlayer = room.players.find(p => p.id === targetId);
         if(!targetPlayer) return;
 
         if (room.phase === 'GAME' || (room.phase === 'IDLE' && room.turnId === targetId)) {
-            // 공격 차례일 때 시간 초과 -> 랜덤 타겟/선언으로 억지 진행
             if (targetPlayer.hand.length > 0) {
                 const rCard = targetPlayer.hand[Math.floor(Math.random() * targetPlayer.hand.length)];
                 const possibleTargets = room.players.filter(p => p.id !== targetId && !p.isReconnecting);
@@ -346,7 +347,6 @@ io.on('connection', (socket) => {
                 }
             }
         } else if (room.phase === 'RESPONSE' && room.activeOffer.receiverId === targetId) {
-            // 방어 차례일 때 시간 초과 -> 랜덤 판정(진실/거짓)
             resolveResponseLogic(room, roomCode, Math.random() < 0.5);
         }
     });
