@@ -36,7 +36,7 @@ const EXTENDED_ANIMALS = [
 // 메모리 상의 방 데이터 저장소
 const rooms = {};
 
-// 방 상태를 클라이언트가 보기 좋게 가공하여 전송 (다른 사람의 패는 숨김)
+// 방 상태를 클라이언트가 보기 좋게 가공하여 전송
 const broadcastRoom = (roomCode) => {
     const room = rooms[roomCode];
     if (!room) return;
@@ -50,11 +50,9 @@ const broadcastRoom = (roomCode) => {
                     userId: p.userId,
                     name: p.name,
                     ready: p.ready,
-                    // 본인 카드만 보이고, 다른 사람 카드는 개수(handCount)만 보임
                     hand: p.id === socket.id ? p.hand : [],
                     handCount: p.hand ? p.hand.length : 0,
                     penalties: p.penalties
-                    // 💡 removeTimer 객체는 클라이언트로 보내면 에러가 나므로 맵핑 과정에서 자연스럽게 제외됨
                 }))
             };
             socket.emit('roomUpdate', safeRoom);
@@ -86,26 +84,35 @@ io.on('connection', (socket) => {
 
         const room = rooms[roomCode];
 
-        // 💡 재접속(Reconnect) 처리 로직
+        // 💡 1. 재접속(Reconnect) 처리 로직
+        // 본인의 고유 세션 ID(userId)가 이미 방에 존재한다면 무조건 본인의 재접속으로 처리
         const existingPlayerIndex = room.players.findIndex(p => p.userId === userId);
         
         if (existingPlayerIndex !== -1) {
             const player = room.players[existingPlayerIndex];
             
-            // 💡 재접속 성공 시 방 퇴장(폭파) 타이머를 취소합니다.
+            // 재접속 성공 시 방 퇴장(폭파) 타이머 취소
             if (player.removeTimer) {
                 clearTimeout(player.removeTimer);
                 player.removeTimer = null;
             }
 
-            console.log(`[RECONNECT] ${userName} reconnected to ${roomCode}`);
-            player.id = socket.id; // 소켓 ID 업데이트
+            console.log(`[RECONNECT] ${player.name} reconnected to ${roomCode}`);
+            player.id = socket.id; // 새 소켓 ID로 업데이트
             socket.join(roomCode);
             broadcastRoom(roomCode);
-            return;
+            return; // 재접속 처리를 완료했으므로 아래 로직은 무시함
         }
 
-        // 💡 관전 모드 처리 로직
+        // 💡 2. 닉네임 중복 검사 (재접속이 아닌 새로운 접속인 경우에만 체크)
+        // 방에 들어가 있는 플레이어 중 동일한 이름이 있는지 확인
+        const isNameTaken = room.players.some(p => p.name === userName);
+        if (isNameTaken) {
+            console.log(`[BLOCKED] Duplicate name attempt: ${userName} in ${roomCode}`);
+            return socket.emit('joinError', '이미 방에서 사용 중인 닉네임입니다. 다른 닉네임으로 변경 후 접속해주세요.');
+        }
+
+        // 💡 3. 관전 모드 처리 로직
         if (room.phase !== 'LOBBY') {
             console.log(`[SPECTATOR] ${userName} joined ${roomCode} as spectator.`);
             socket.join(roomCode);
@@ -118,7 +125,7 @@ io.on('connection', (socket) => {
             return;
         }
 
-        // 💡 정상적인 새 플레이어 입장
+        // 💡 4. 정상적인 새 플레이어 입장
         if (room.players.length >= 8) {
             return socket.emit('joinError', '방의 최대 인원(8명)이 가득 찼습니다.');
         }
@@ -303,7 +310,7 @@ io.on('connection', (socket) => {
         }, extraCard ? 6500 : 4000); 
     });
 
-    // 💡 7. 사용자 연결 종료 및 빈 방 폭파 로직
+    // 7. 사용자 연결 종료 및 빈 방 폭파 로직
     socket.on('disconnect', () => {
         console.log(`[DISCONNECT] User disconnected: ${socket.id}`);
         
@@ -318,7 +325,7 @@ io.on('connection', (socket) => {
                     room.players = room.players.filter(p => p.userId !== player.userId);
                     console.log(`[LEAVE] ${player.name} 님이 1분 미접속으로 방(${roomCode})에서 제거되었습니다.`);
                     
-                    // 💡 유저를 제거한 후 남은 인원이 아무도 없다면 방을 폭파시킵니다.
+                    // 유저를 제거한 후 남은 인원이 아무도 없다면 방을 폭파시킵니다.
                     if (room.players.length === 0) {
                         console.log(`[DESTROY] 방(${roomCode})에 남은 인원이 없어 완전히 폭파되었습니다 💥`);
                         delete rooms[roomCode];
