@@ -5,276 +5,303 @@ const cors = require('cors');
 
 const app = express();
 app.use(cors());
+
 const server = http.createServer(app);
 const io = new Server(server, {
-    cors: { origin: "*", methods: ["GET", "POST"] }
+    cors: {
+        origin: "*", // 실제 배포 시에는 클라이언트 도메인으로 제한하는 것을 권장합니다.
+        methods: ["GET", "POST"]
+    }
 });
 
-const rooms = {};
-
-const IMAGE_POOLS = {
-    spider: Array.from({length: 10}, (_, i) => `https://masi4882.dothome.co.kr/0${i}.jpg?v=2026`),
-    stinkbug: Array.from({length: 10}, (_, i) => `https://masi4882.dothome.co.kr/1${i}.jpg?v=2026`),
-    toad: Array.from({length: 10}, (_, i) => `https://masi4882.dothome.co.kr/2${i}.jpg?v=2026`),
-    cockroach: Array.from({length: 10}, (_, i) => `https://masi4882.dothome.co.kr/3${i}.jpg?v=2026`),
-    scorpion: Array.from({length: 10}, (_, i) => `https://masi4882.dothome.co.kr/4${i}.jpg?v=2026`),
-    bat: Array.from({length: 10}, (_, i) => `https://masi4882.dothome.co.kr/5${i}.jpg?v=2026`),
-    rat: Array.from({length: 10}, (_, i) => `https://masi4882.dothome.co.kr/6${i}.jpg?v=2026`),
-    fly: Array.from({length: 10}, (_, i) => `https://masi4882.dothome.co.kr/7${i}.jpg?v=2026`),
-    mosquito: Array.from({length: 10}, (_, i) => `https://masi4882.dothome.co.kr/8${i}.jpg?v=2026`),
-    snake: Array.from({length: 10}, (_, i) => `https://masi4882.dothome.co.kr/9${i}.jpg?v=2026`)
-};
-
+// 동물 카드 기본 덱 세팅 (8종)
 const BASE_ANIMALS = [
-    { id: 'cockroach', name: '바퀴벌레', color: '#78350f' },
-    { id: 'bat', name: '박쥐', color: '#334155' },
-    { id: 'fly', name: '파리', color: '#15803d' },
-    { id: 'toad', name: '두꺼비', color: '#065f46' },
-    { id: 'scorpion', name: '전갈', color: '#991b1b' },
-    { id: 'rat', name: '쥐', color: '#57534e' },
-    { id: 'spider', name: '거미', color: '#1e1b4b' },
-    { id: 'stinkbug', name: '노린재', color: '#854d0e' }
+    { id: 'cockroach', name: '바퀴벌레', color: '#78350f', repImg: 'https://masi4882.dothome.co.kr/31.jpg?v=2026' },
+    { id: 'bat', name: '박쥐', color: '#334155', repImg: 'https://masi4882.dothome.co.kr/51.jpg?v=2026' },
+    { id: 'fly', name: '파리', color: '#15803d', repImg: 'https://masi4882.dothome.co.kr/71.jpg?v=2026' },
+    { id: 'toad', name: '두꺼비', color: '#065f46', repImg: 'https://masi4882.dothome.co.kr/21.jpg?v=2026' },
+    { id: 'scorpion', name: '전갈', color: '#991b1b', repImg: 'https://masi4882.dothome.co.kr/41.jpg?v=2026' },
+    { id: 'rat', name: '쥐', color: '#57534e', repImg: 'https://masi4882.dothome.co.kr/61.jpg?v=2026' },
+    { id: 'spider', name: '거미', color: '#1e1b4b', repImg: 'https://masi4882.dothome.co.kr/01.jpg?v=2026' },
+    { id: 'stinkbug', name: '노린재', color: '#854d0e', repImg: 'https://masi4882.dothome.co.kr/11.jpg?v=2026' }
 ];
 
+// 확장 덱 세팅 (7~8인용, 10종)
 const EXTENDED_ANIMALS = [
     ...BASE_ANIMALS,
-    { id: 'mosquito', name: '모기', color: '#dc2626' },
-    { id: 'snake', name: '뱀', color: '#16a34a' }
+    { id: 'mosquito', name: '모기', color: '#dc2626', repImg: 'https://masi4882.dothome.co.kr/81.jpg?v=2026' },
+    { id: 'snake', name: '뱀', color: '#16a34a', repImg: 'https://masi4882.dothome.co.kr/91.jpg?v=2026' }
 ];
 
-const ROYAL_IMG_INDEX = 0; 
+// 메모리 상의 방 데이터 저장소
+const rooms = {};
 
-function generateDeck(playerCount) {
-    let deck = [];
-    const animals = playerCount >= 7 ? EXTENDED_ANIMALS : BASE_ANIMALS;
-    let instId = 0;
-    
-    for (const animal of animals) {
-        const royalImg = IMAGE_POOLS[animal.id][ROYAL_IMG_INDEX];
-        const normalImages = IMAGE_POOLS[animal.id].filter((_, idx) => idx !== ROYAL_IMG_INDEX);
-        const shuffledNormal = normalImages.sort(() => Math.random() - 0.5).slice(0, 7);
-        const selectedImages = [royalImg, ...shuffledNormal].sort(() => Math.random() - 0.5);
-        
-        for (let i = 0; i < 8; i++) {
-            const currentImg = selectedImages[i];
-            const isRoyal = (currentImg === royalImg);
-            
-            deck.push({ 
-                ...animal, 
-                baseName: animal.name,
-                name: isRoyal ? `${animal.name} 👑` : animal.name,
-                isRoyal: isRoyal,
-                inst: `${animal.id}_${instId++}`,
-                img: currentImg 
-            });
-        }
-    }
-    
-    for (let i = deck.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [deck[i], deck[j]] = [deck[j], deck[i]];
-    }
-    return deck;
-}
+// 방 상태를 클라이언트가 보기 좋게 가공하여 전송 (다른 사람의 패는 숨김)
+const broadcastRoom = (roomCode) => {
+    const room = rooms[roomCode];
+    if (!room) return;
 
-function checkGameOver(room) {
-    const penaltyLimit = room.players.length >= 7 ? 3 : 4; 
-    let loser = null;
-
-    for (const p of room.players) {
-        if (p.hand.length === 0 && room.turnId === p.id) { loser = p.id; break; }
-        const counts = {};
-        for (const pen of p.penalties) {
-            counts[pen.id] = (counts[pen.id] || 0) + 1;
-            if (counts[pen.id] >= penaltyLimit) { loser = p.id; break; }
-        }
-        if (loser) break;
-    }
-
-    if (loser) {
-        room.phase = 'GAME_OVER';
-        room.loserId = loser;
-        return true;
-    }
-    return false;
-}
+    io.in(roomCode).fetchSockets().then(sockets => {
+        sockets.forEach(socket => {
+            const safeRoom = {
+                ...room,
+                players: room.players.map(p => ({
+                    ...p,
+                    // 본인 카드만 보이고, 다른 사람 카드는 개수(handCount)만 보임
+                    hand: p.id === socket.id ? p.hand : [],
+                    handCount: p.hand ? p.hand.length : 0
+                }))
+            };
+            socket.emit('roomUpdate', safeRoom);
+        });
+    });
+};
 
 io.on('connection', (socket) => {
-    socket.on('joinRoom', ({ roomCode, userName }) => {
-        if (!rooms[roomCode]) {
-            rooms[roomCode] = { phase: 'LOBBY', players: [], turnId: null, activeOffer: null, revealData: null };
-        }
-        const room = rooms[roomCode];
-        
-        if (room.phase !== 'LOBBY') return socket.emit('error', '게임이 이미 진행 중입니다.');
-        if (room.players.length >= 8) return socket.emit('error', '방이 가득 찼습니다. (최대 8명)');
-        if (room.players.find(p => p.name === userName)) return socket.emit('error', '이미 존재하는 닉네임입니다.');
+    console.log(`[CONNECT] User connected: ${socket.id}`);
 
-        room.players.push({ id: socket.id, name: userName, ready: false, hand: [], penalties: [] });
+    // 1. 방 입장 (관전 모드 및 재접속 처리 포함)
+    socket.on('joinRoom', ({ roomCode, userName, userId }) => {
+        if (!roomCode || !userName) {
+            return socket.emit('joinError', '방 코드와 닉네임을 확인해주세요.');
+        }
+
+        if (!rooms[roomCode]) {
+            // 방이 없으면 새로 생성
+            rooms[roomCode] = {
+                code: roomCode,
+                phase: 'LOBBY',
+                players: [],
+                turnId: null,
+                activeOffer: null,
+                revealData: null,
+                loserId: null
+            };
+        }
+
+        const room = rooms[roomCode];
+
+        // 💡 재접속(Reconnect) 처리 로직
+        const existingPlayerIndex = room.players.findIndex(p => p.userId === userId);
+        
+        if (existingPlayerIndex !== -1) {
+            // 기존 플레이어가 튕겼다가 돌아온 경우 소켓 ID 업데이트
+            console.log(`[RECONNECT] ${userName} reconnected to ${roomCode}`);
+            room.players[existingPlayerIndex].id = socket.id;
+            socket.join(roomCode);
+            broadcastRoom(roomCode);
+            return;
+        }
+
+        // 💡 관전 모드 처리 로직
+        if (room.phase !== 'LOBBY') {
+            console.log(`[SPECTATOR] ${userName} joined ${roomCode} as spectator.`);
+            socket.join(roomCode); // 소켓 방에는 입장시키지만
+            // room.players 에는 추가하지 않음 (관전자로 취급)
+            
+            // 현재 방 상태를 전송하여 화면을 띄워줌
+            const safeRoom = {
+                ...room,
+                players: room.players.map(p => ({ ...p, hand: [], handCount: p.hand ? p.hand.length : 0 }))
+            };
+            socket.emit('roomUpdate', safeRoom);
+            return;
+        }
+
+        // 💡 정상적인 새 플레이어 입장
+        if (room.players.length >= 8) {
+            return socket.emit('joinError', '방의 최대 인원(8명)이 가득 찼습니다.');
+        }
+
+        const newPlayer = {
+            id: socket.id,
+            userId: userId, // 재접속 판별용 고유 ID
+            name: userName,
+            ready: false,
+            hand: [],
+            penalties: []
+        };
+
+        room.players.push(newPlayer);
         socket.join(roomCode);
-        io.to(roomCode).emit('roomUpdate', room);
+        console.log(`[JOIN] ${userName} joined ${roomCode}`);
+        broadcastRoom(roomCode);
     });
 
+    // 2. 준비 토글
     socket.on('playerReady', ({ roomCode, ready }) => {
         const room = rooms[roomCode];
-        if (!room) return;
+        if (!room || room.phase !== 'LOBBY') return;
+
         const player = room.players.find(p => p.id === socket.id);
         if (player) {
             player.ready = ready;
-            io.to(roomCode).emit('roomUpdate', room);
+            broadcastRoom(roomCode);
         }
     });
 
+    // 3. 게임 시작
     socket.on('startGame', (roomCode) => {
         const room = rooms[roomCode];
-        if (!room || room.players[0].id !== socket.id) return; 
-        
-        const deck = generateDeck(room.players.length);
-        room.players.forEach(p => p.hand = []);
-        let dealIdx = 0;
-        while (deck.length > 0) {
-            room.players[dealIdx % room.players.length].hand.push(deck.pop());
-            dealIdx++;
+        if (!room || room.phase !== 'LOBBY') return;
+
+        // 방장(첫 번째 플레이어)인지 확인
+        if (room.players[0].id !== socket.id) return; 
+
+        // 덱 생성 및 셔플
+        const baseSet = room.players.length >= 7 ? EXTENDED_ANIMALS : BASE_ANIMALS;
+        let deck = [];
+        baseSet.forEach(animal => {
+            for (let i = 0; i < 8; i++) {
+                deck.push({ ...animal, inst: `${animal.id}_${i}`, img: animal.repImg });
+            }
+        });
+
+        // Fisher-Yates 셔플
+        for (let i = deck.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [deck[i], deck[j]] = [deck[j], deck[i]];
         }
-        
-        room.phase = 'IDLE';
-        const randomIndex = Math.floor(Math.random() * room.players.length);
-        room.turnId = room.players[randomIndex].id;
-        
-        io.to(roomCode).emit('gameStarted', room);
+
+        // 카드 분배
+        let pIndex = 0;
+        while (deck.length > 0) {
+            room.players[pIndex].hand.push(deck.pop());
+            pIndex = (pIndex + 1) % room.players.length;
+        }
+
+        // 게임 상태 초기화
+        room.phase = 'GAME';
+        room.turnId = room.players[0].id; // 방장부터 시작
+        room.players.forEach(p => p.penalties = []);
+
+        io.in(roomCode).emit('gameStarted', { phase: 'GAME' });
+        broadcastRoom(roomCode);
     });
 
+    // 4. 카드 건네기 (공격)
     socket.on('submitOffer', ({ roomCode, targetId, card, claim }) => {
         const room = rooms[roomCode];
-        if (!room || room.turnId !== socket.id || room.phase !== 'IDLE') return;
+        if (!room || room.phase !== 'GAME' || room.turnId !== socket.id) return;
 
-        const player = room.players.find(p => p.id === socket.id);
-        player.hand = player.hand.filter(c => c.inst !== card.inst);
-        
-        room.activeOffer = { card, claim, receiverId: targetId, seenIds: [socket.id] };
+        const attacker = room.players.find(p => p.id === socket.id);
+        // 제출한 카드를 손패에서 제거
+        attacker.hand = attacker.hand.filter(c => c.inst !== card.inst);
+
+        room.activeOffer = {
+            card: card,
+            claim: claim,
+            receiverId: targetId,
+            seenIds: [socket.id] // 카드를 확인한 사람 목록 (최초 공격자 포함)
+        };
         room.phase = 'RESPONSE';
-        io.to(roomCode).emit('onOffer', room);
+
+        io.in(roomCode).emit('onOffer', { phase: 'RESPONSE' });
+        broadcastRoom(roomCode);
     });
 
+    // 5. 카드 넘기기 (패스)
     socket.on('submitPass', ({ roomCode, nextTargetId, newClaim }) => {
         const room = rooms[roomCode];
-        if (!room || room.phase !== 'RESPONSE' || room.activeOffer.receiverId !== socket.id) return;
-        
+        if (!room || room.phase !== 'RESPONSE' || !room.activeOffer) return;
+        if (room.activeOffer.receiverId !== socket.id) return; // 수비자가 아니면 차단
+
         room.activeOffer.seenIds.push(socket.id);
-        room.activeOffer.receiverId = nextTargetId;
         room.activeOffer.claim = newClaim;
-        
-        io.to(roomCode).emit('onOffer', room);
+        room.activeOffer.receiverId = nextTargetId;
+
+        io.in(roomCode).emit('onOffer', { phase: 'RESPONSE' });
+        broadcastRoom(roomCode);
     });
 
+    // 6. 진실/거짓 판정 로직
     socket.on('resolveResponse', ({ roomCode, guessIsTrue }) => {
         const room = rooms[roomCode];
-        if (!room || room.phase !== 'RESPONSE' || room.activeOffer.receiverId !== socket.id) return;
+        if (!room || room.phase !== 'RESPONSE' || !room.activeOffer) return;
+        if (room.activeOffer.receiverId !== socket.id) return;
 
-        const offer = room.activeOffer;
-        
-        let isActuallyTrue = false;
-        if (offer.claim === '왕카드') {
-            isActuallyTrue = offer.card.isRoyal;
-        } else {
-            isActuallyTrue = (offer.card.baseName === offer.claim); 
-        }
-        
+        const actualCard = room.activeOffer.card;
+        const claim = room.activeOffer.claim;
+        const attackerId = room.activeOffer.seenIds[room.activeOffer.seenIds.length - 1];
+
+        // 💡 예측 결과 계산 ('왕카드' 선언은 실제 카드와 다를 수밖에 없으므로 거짓(false)으로 취급됨)
+        const isActuallyTrue = (actualCard.name === claim);
         const guessCorrect = (guessIsTrue === isActuallyTrue);
-        
-        const senderId = offer.seenIds[offer.seenIds.length - 1];
-        const receiverId = socket.id;
-        
-        const penaltyId = guessCorrect ? senderId : receiverId; 
-        const winnerId = guessCorrect ? receiverId : senderId;  
 
-        let extraCard = null;
-        const penaltyPlayer = room.players.find(p => p.id === penaltyId);
-        const winnerPlayer = room.players.find(p => p.id === winnerId);
-
-        // 🌟 여기서 미리 승자의 덱에서 추가 벌칙 카드를 빼둡니다. (클라이언트 화면에서 승자의 벌칙 카드가 즉시 줄어드는 효과)
-        if (penaltyPlayer) {
-            if (offer.claim === '왕카드' && winnerPlayer && winnerPlayer.penalties.length > 0) {
-                const randIdx = Math.floor(Math.random() * winnerPlayer.penalties.length);
-                extraCard = winnerPlayer.penalties.splice(randIdx, 1)[0];
-            }
+        let penaltyId, winnerId;
+        if (guessCorrect) {
+            penaltyId = attackerId; // 맞췄으므로 공격자가 먹음
+            winnerId = socket.id;
+        } else {
+            penaltyId = socket.id; // 틀렸으므로 수비자가 먹음
+            winnerId = attackerId;
         }
+
+        const penaltyPlayer = room.players.find(p => p.id === penaltyId);
+        const winningPlayer = room.players.find(p => p.id === winnerId);
+        
+        let extraCard = null;
+
+        // 💡 더블 페널티 룰렛 판정 로직 (왕카드 선언 시)
+        if (claim === '왕카드' && winningPlayer.penalties.length > 0) {
+            // 승리자의 벌칙 덱에서 랜덤으로 한 장을 뽑아 패배자에게 전가
+            const randomIndex = Math.floor(Math.random() * winningPlayer.penalties.length);
+            extraCard = winningPlayer.penalties[randomIndex];
+            winningPlayer.penalties.splice(randomIndex, 1);
+            penaltyPlayer.penalties.push(extraCard);
+        }
+
+        // 이번 턴의 벌칙 카드 부여
+        penaltyPlayer.penalties.push(actualCard);
 
         room.revealData = {
             guessCorrect,
-            actualCard: offer.card,
-            penaltyId: penaltyId,
-            winnerId: winnerId,
-            extraCard: extraCard // 클라이언트에 추가 벌칙 카드 정보 전송
+            actualCard,
+            winnerId,
+            penaltyId,
+            extraCard
         };
-        
         room.phase = 'REVEAL';
-        io.to(roomCode).emit('revealStart', room);
 
-        // 🌟 추가 벌칙이 있다면 애니메이션 재생을 위해 서버 턴 지연 시간을 7.5초로 늘립니다.
-        const resolveDelay = extraCard ? 7500 : 4000;
+        io.in(roomCode).emit('revealStart', { phase: 'REVEAL' });
+        broadcastRoom(roomCode);
 
+        // 연출 대기 후 라운드 정리 및 게임 오버 판정
         setTimeout(() => {
-            if (rooms[roomCode]) {
-                const r = rooms[roomCode];
-                const pPlayer = r.players.find(p => p.id === penaltyId);
-                
-                if (pPlayer) {
-                    pPlayer.penalties.push(offer.card);
-                    if (extraCard) {
-                        pPlayer.penalties.push(extraCard); // 패자에게 추가 카드 최종 적용
-                    }
-                }
-                
-                r.activeOffer = null;
-                r.revealData = null;
-                r.turnId = penaltyId;
-                r.phase = 'IDLE';
-                
-                if (!checkGameOver(r)) {
-                    io.to(roomCode).emit('roundResolved', r);
-                } else {
-                    io.to(roomCode).emit('roomUpdate', r); 
-                }
+            const penaltyLimit = room.players.length >= 7 ? 3 : 4;
+            
+            // 동일 벌칙 카드 한계 초과 여부 확인
+            const isPenaltyOver = penaltyPlayer.penalties.reduce((acc, card) => {
+                acc[card.id] = (acc[card.id] || 0) + 1;
+                return acc;
+            }, {});
+
+            const hasLostByPenalty = Object.values(isPenaltyOver).some(count => count >= penaltyLimit);
+            const hasLostByHand = penaltyPlayer.hand.length === 0;
+
+            if (hasLostByPenalty || hasLostByHand) {
+                room.phase = 'GAME_OVER';
+                room.loserId = penaltyPlayer.id;
+            } else {
+                room.phase = 'GAME';
+                room.turnId = penaltyPlayer.id; // 벌칙을 먹은 사람이 다음 턴 선공
+                room.activeOffer = null;
+                room.revealData = null;
             }
-        }, resolveDelay); 
+
+            broadcastRoom(roomCode);
+        }, extraCard ? 6500 : 4000); // 룰렛 애니메이션이 있으면 6.5초, 없으면 4초 대기
     });
 
+    // 연결 종료 시 (임시 이탈)
     socket.on('disconnect', () => {
-        for (const roomCode in rooms) {
-            const room = rooms[roomCode];
-            const pIdx = room.players.findIndex(p => p.id === socket.id);
-            
-            if (pIdx !== -1) {
-                room.players.splice(pIdx, 1);
-                
-                if (room.players.length === 0) {
-                    delete rooms[roomCode];
-                    continue;
-                }
-                
-                if (room.phase !== 'LOBBY' && room.phase !== 'GAME_OVER') {
-                    if (room.players.length < 2) {
-                        room.phase = 'GAME_OVER';
-                        room.loserId = socket.id; 
-                    } else {
-                        if (room.turnId === socket.id) {
-                            room.turnId = room.players[pIdx % room.players.length].id;
-                            room.phase = 'IDLE';
-                            room.activeOffer = null;
-                        } else if (room.activeOffer && room.activeOffer.receiverId === socket.id) {
-                            const senderId = room.activeOffer.seenIds[room.activeOffer.seenIds.length - 1];
-                            room.turnId = senderId || room.players[0].id;
-                            room.phase = 'IDLE';
-                            room.activeOffer = null;
-                        }
-                        checkGameOver(room);
-                    }
-                }
-                io.to(roomCode).emit('roomUpdate', room);
-            }
-        }
+        console.log(`[DISCONNECT] User disconnected: ${socket.id}`);
+        // 클라이언트 재접속을 허용하기 위해 players 배열에서 당장 삭제하지 않고 그대로 둡니다.
+        // 추후 로비 상태일 때만 정리하거나 주기적으로 청소하는 로직을 추가할 수 있습니다.
     });
 });
 
-server.listen(4000, () => console.log('Server running on port 4000'));
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => {
+    console.log(`🚀 서버가 정상적으로 실행되었습니다. 포트: ${PORT}`);
+});
