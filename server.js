@@ -98,7 +98,7 @@ io.on('connection', (socket) => {
             const oldId = player.id;
             player.id = socket.id; // 새 소켓 ID로 업데이트
 
-            // 💡 [핵심 버그 픽스] 게임 상태에 기록된 모든 옛날 ID를 새 ID로 교체합니다.
+            // 게임 상태에 기록된 모든 옛날 ID를 새 ID로 교체
             if (room.turnId === oldId) room.turnId = socket.id;
             if (room.loserId === oldId) room.loserId = socket.id;
             if (room.activeOffer) {
@@ -287,6 +287,7 @@ io.on('connection', (socket) => {
         broadcastRoom(roomCode);
 
         setTimeout(() => {
+            // 퇴장 등으로 인해 인원수가 실시간으로 바뀌어도 룰(제한수)이 동적으로 적용됩니다.
             const penaltyLimit = room.players.length >= 7 ? 3 : 4;
             
             const isPenaltyOver = penaltyPlayer.penalties.reduce((acc, card) => {
@@ -311,7 +312,7 @@ io.on('connection', (socket) => {
         }, extraCard ? 6500 : 4000); 
     });
 
-    // 7. 사용자 연결 종료 및 빈 방 폭파 로직
+    // 7. 사용자 연결 종료 및 빈 방 폭파, 그리고 "남은 인원 속행" 로직 🚀
     socket.on('disconnect', () => {
         console.log(`[DISCONNECT] User disconnected: ${socket.id}`);
         
@@ -321,30 +322,60 @@ io.on('connection', (socket) => {
             
             if (player) {
                 player.removeTimer = setTimeout(() => {
-                    // 1분이 지나면 유저 색출
                     const pIndex = room.players.findIndex(p => p.userId === player.userId);
                     if (pIndex === -1) return;
 
                     room.players.splice(pIndex, 1);
-                    console.log(`[LEAVE] ${player.name} 님이 1분 미접속으로 방(${roomCode})에서 퇴장되었습니다.`);
+                    console.log(`[LEAVE] ${player.name} 님이 1분 미접속으로 방(${roomCode})에서 완전 퇴장되었습니다.`);
                     
                     if (room.players.length === 0) {
+                        // 남은 사람이 한 명도 없으면 방 완전 폭파
                         console.log(`[DESTROY] 방(${roomCode})에 남은 인원이 없어 폭파되었습니다 💥`);
                         delete rooms[roomCode];
                     } else {
-                        // 💡 [핵심 버그 픽스] 게임 중 누군가 1분 초과로 완전히 퇴장당하면 남은 사람들은 게임 불가하므로 로비로 강제 리셋
+                        // 💡 게임 진행 중 누군가 나갔을 때, "리셋"하지 않고 "이어서 진행" 하도록 처리
                         if (room.phase !== 'LOBBY' && room.phase !== 'GAME_OVER') {
-                            room.phase = 'LOBBY';
-                            room.turnId = null;
-                            room.activeOffer = null;
-                            room.revealData = null;
-                            room.players.forEach(p => {
-                                p.ready = false;
-                                p.hand = [];
-                                p.penalties = [];
-                            });
-                            io.in(roomCode).emit('gameError', `[알림] ${player.name} 님이 미접속으로 퇴장되어 방이 로비로 리셋되었습니다.`);
+                            let turnFixed = false;
+                            
+                            // 1. 만약 나간 사람의 턴이었다면, 남은 인원 중 첫번째(방장)에게 턴을 넘김
+                            if (room.turnId === player.id) {
+                                room.turnId = room.players[0].id;
+                                turnFixed = true;
+                            }
+                            
+                            // 2. 누군가 카드를 줬는데, 나간 사람이 연관된 공방이라면 오류를 방지하기 위해 해당 공방 취소
+                            if (room.activeOffer && (room.activeOffer.receiverId === player.id || room.activeOffer.seenIds.includes(player.id))) {
+                                room.activeOffer = null;
+                                room.phase = 'GAME';
+                                room.turnId = room.players[0].id;
+                                turnFixed = true;
+                            }
+                            
+                            // 3. 결과 확인 연출 중에 나갔다면 바로 다음 턴으로 초기화
+                            if (room.phase === 'REVEAL' && room.revealData && (room.revealData.penaltyId === player.id || room.revealData.winnerId === player.id)) {
+                                room.revealData = null;
+                                room.phase = 'GAME';
+                                room.turnId = room.players[0].id;
+                                turnFixed = true;
+                            }
+
+                            // 4. 남은 인원이 1명뿐이라면 어차피 게임이 성립 안 되므로 로비로 강제 종료
+                            if (room.players.length <= 1) {
+                                room.phase = 'LOBBY';
+                                room.turnId = null;
+                                room.activeOffer = null;
+                                room.revealData = null;
+                                room.players.forEach(p => { p.ready = false; p.hand = []; p.penalties = []; });
+                                io.in(roomCode).emit('gameError', `[알림] 진행 가능한 최소 인원(2명)이 부족하여 방이 로비로 리셋되었습니다.`);
+                            } else {
+                                // 정상적으로 남은 인원끼리 속행할 때 알림 전송
+                                const msg = turnFixed 
+                                    ? `[알림] 턴을 진행 중이던 ${player.name} 님이 퇴장하여, 진행 중이던 공방이 취소되고 방장부터 턴이 재개됩니다.`
+                                    : `[알림] ${player.name} 님이 미접속으로 퇴장했습니다. 남은 인원만으로 게임 룰이 맞춰지며 계속 진행합니다!`;
+                                io.in(roomCode).emit('gameError', msg);
+                            }
                         }
+                        // 모든 처리가 끝난 후 바뀐 방 상태를 남은 사람들에게 업데이트
                         broadcastRoom(roomCode);
                     }
                 }, 60000); // 60초 (1분)
