@@ -195,7 +195,11 @@ io.on('connection', (socket) => {
         }
 
         room.phase = 'GAME';
-        room.turnId = room.players[0].id;
+        
+        // 💡 랜덤 선 플레이어 지정
+        const randomTurnIndex = Math.floor(Math.random() * room.players.length);
+        room.turnId = room.players[randomTurnIndex].id;
+        
         room.players.forEach(p => p.penalties = []);
 
         io.in(roomCode).emit('gameStarted', { phase: 'GAME' });
@@ -377,7 +381,6 @@ io.on('connection', (socket) => {
             const player = room.players.find(p => p.id === socket.id);
             
             if (player) {
-                // 💡 로비에서는 창을 닫았을 때 유령 방이 남지 않도록 대기 시간을 10초로 대폭 단축
                 const timeoutDuration = room.phase === 'LOBBY' ? 10000 : 60000;
                 
                 player.removeTimer = setTimeout(() => {
