@@ -29,7 +29,10 @@ const disconnectTimeouts = {};
 function sanitizeRoom(room) { return room; }
 
 function resolveResponseLogic(room, roomCode, guessIsTrue) {
-    if (!room || !room.activeOffer) return;
+    // 💡 [수정] 진행 중복 차단: 현재 상태가 RESPONSE일 때만 결과 처리 실행
+    if (!room || !room.activeOffer || room.phase !== 'RESPONSE') return;
+
+    room.phase = 'REVEAL'; // 💡 [수정] 처리 즉시 상태를 변경하여 다른 봇들의 중복 요청 원천 차단
 
     const { card, claim, receiverId, seenIds } = room.activeOffer;
     const attackerId = seenIds[seenIds.length - 1]; 
@@ -56,7 +59,6 @@ function resolveResponseLogic(room, roomCode, guessIsTrue) {
     loser.penalties.push(card);
     
     room.revealData = { guessCorrect, actualCard: card, winnerId, penaltyId, extraCard, claim };
-    room.phase = 'REVEAL';
     io.to(roomCode).emit('revealStart', sanitizeRoom(room));
 
     setTimeout(() => {
@@ -66,7 +68,9 @@ function resolveResponseLogic(room, roomCode, guessIsTrue) {
         r.activeOffer = null;
         r.revealData = null;
         r.turnId = penaltyId; 
-        r.phase = 'IDLE';
+        
+        // 💡 [핵심 수정] 봇 먹통 원인 해결: 'IDLE' 대신 'GAME'으로 설정하여 봇이 다음 턴을 정상 인식하게 함
+        r.phase = 'GAME'; 
 
         const penaltyLimit = r.players.length >= 7 ? 3 : 4;
         let isGameOver = false;
@@ -216,7 +220,7 @@ io.on('connection', (socket) => {
                                 if (isActive) {
                                     r.activeOffer = null;
                                     r.revealData = null;
-                                    r.phase = 'IDLE';
+                                    r.phase = 'GAME'; // 💡 [수정] 튕긴 후 턴 리셋시에도 IDLE이 아닌 GAME으로 변경
                                     if (r.players.length > 0) {
                                         r.turnId = r.players[Math.floor(Math.random() * r.players.length)].id;
                                     }
@@ -285,9 +289,12 @@ io.on('connection', (socket) => {
 
     socket.on('submitOffer', ({ roomCode, targetId, card, claim }) => {
         const room = rooms[roomCode];
-        if (!room) return;
+        // 💡 [수정] 정확히 GAME 상태일 때만, 그리고 activeOffer가 없을 때만 공격을 허용
+        if (!room || room.phase !== 'GAME' || room.activeOffer) return;
         
         const attacker = room.players.find(p => p.id === socket.id);
+        if (!attacker) return;
+
         attacker.hand = attacker.hand.filter(c => c.inst !== card.inst);
         attacker.handCount = attacker.hand.length;
         attacker.lastClaim = claim;
@@ -300,10 +307,11 @@ io.on('connection', (socket) => {
 
     socket.on('submitPass', ({ roomCode, nextTargetId, newClaim }) => {
         const room = rooms[roomCode];
-        if (!room) return;
+        // 💡 [수정] 정확히 RESPONSE 상태일 때만 허용
+        if (!room || room.phase !== 'RESPONSE' || !room.activeOffer) return;
         
         const passer = room.players.find(p => p.id === socket.id);
-        passer.lastClaim = newClaim;
+        if (passer) passer.lastClaim = newClaim;
 
         room.activeOffer.seenIds.push(socket.id);
         room.activeOffer.receiverId = nextTargetId;
@@ -327,7 +335,8 @@ io.on('connection', (socket) => {
         const targetPlayer = room.players.find(p => p.id === targetId);
         if(!targetPlayer) return;
 
-        if (room.phase === 'GAME' || (room.phase === 'IDLE' && room.turnId === targetId)) {
+        // 💡 [수정] 타임아웃 강제 행동 처리 로직도 명확하게 수정
+        if (room.phase === 'GAME' && room.turnId === targetId && !room.activeOffer) {
             if (targetPlayer.hand.length > 0) {
                 const rCard = targetPlayer.hand[Math.floor(Math.random() * targetPlayer.hand.length)];
                 const possibleTargets = room.players.filter(p => p.id !== targetId && !p.isReconnecting);
@@ -344,7 +353,7 @@ io.on('connection', (socket) => {
                     io.to(roomCode).emit('onOffer', sanitizeRoom(room));
                 }
             }
-        } else if (room.phase === 'RESPONSE' && room.activeOffer.receiverId === targetId) {
+        } else if (room.phase === 'RESPONSE' && room.activeOffer && room.activeOffer.receiverId === targetId) {
             resolveResponseLogic(room, roomCode, Math.random() < 0.5);
         }
     });
