@@ -107,17 +107,24 @@ io.on('connection', (socket) => {
         let playerByUserId = room.players.find(p => p.userId === userId);
         let playerByName = room.players.find(p => p.name === userName);
 
-        if (!playerByUserId && playerByName) {
-            socket.emit('joinError', '이미 사용중인 닉네임입니다. 다른 닉네임을 사용해주세요.');
+        // 💡 [핵심 수정] 유저 ID가 다르더라도(기기가 바뀌었더라도) 닉네임이 같고 그 유저가 튕긴 상태라면 접속을 허용합니다!
+        let targetPlayer = playerByUserId;
+        if (!targetPlayer && playerByName && playerByName.isReconnecting) {
+            targetPlayer = playerByName;
+            targetPlayer.userId = userId; // 새로운 접속 ID로 덮어씌움
+        }
+
+        if (!targetPlayer && playerByName && !playerByName.isReconnecting) {
+            socket.emit('joinError', '이미 게임에 접속해 있는 닉네임입니다.');
             return;
         }
 
-        if (playerByUserId) {
-            const oldId = playerByUserId.id;
+        if (targetPlayer) {
+            const oldId = targetPlayer.id;
             const newId = socket.id;
-            playerByUserId.id = newId;
-            playerByUserId.isReconnecting = false;
-            playerByUserId.disconnectTime = null;
+            targetPlayer.id = newId;
+            targetPlayer.isReconnecting = false;
+            targetPlayer.disconnectTime = null;
 
             if (room.turnId === oldId) room.turnId = newId;
             if (room.activeOffer) {
@@ -131,9 +138,9 @@ io.on('connection', (socket) => {
                 if (room.revealData.penaltyId === oldId) room.revealData.penaltyId = newId;
             }
 
-            if (disconnectTimeouts[userId]) {
-                clearTimeout(disconnectTimeouts[userId]);
-                delete disconnectTimeouts[userId];
+            if (disconnectTimeouts[targetPlayer.userId]) {
+                clearTimeout(disconnectTimeouts[targetPlayer.userId]);
+                delete disconnectTimeouts[targetPlayer.userId];
             }
         } else {
             if (room.phase !== 'LOBBY') {
@@ -278,13 +285,10 @@ io.on('connection', (socket) => {
         room.players.forEach(p => { p.handCount = p.hand.length; });
         room.phase = 'GAME';
 
-        // 💡 [핵심 수정] 턴 지정 로직 (봇게임 선공 / 멀티게임 랜덤)
         const humanPlayers = room.players.filter(p => !p.isBot);
         if (humanPlayers.length === 1 && room.players.some(p => p.isBot)) {
-            // 혼자하기 모드: 방 안의 진짜 사람(1명)이 선공
             room.turnId = humanPlayers[0].id;
         } else {
-            // 멀티플레이 모드: 모든 플레이어 중에서 랜덤 선공
             room.turnId = room.players[Math.floor(Math.random() * room.players.length)].id;
         }
 
