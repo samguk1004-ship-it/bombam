@@ -104,25 +104,49 @@ io.on('connection', (socket) => {
         }
         const room = rooms[roomCode];
         
+        // 사용자의 실제 IP 추출 (공유기 등 동일 네트워크 구분용)
+        const clientIp = socket.handshake.headers['x-forwarded-for'] || socket.handshake.address;
+        
         let playerByUserId = room.players.find(p => p.userId === userId);
         let playerByName = room.players.find(p => p.name === userName);
 
-        // 💡 [핵심 수정] 유저 ID가 다르더라도(기기가 바뀌었더라도) 닉네임이 같고 그 유저가 튕긴 상태라면 접속을 허용합니다!
         let targetPlayer = playerByUserId;
+        
+        // 1. 기존 튕긴 유저가 닉네임으로 다시 찾아오는 경우 (브라우저가 바뀐 경우)
         if (!targetPlayer && playerByName && playerByName.isReconnecting) {
             targetPlayer = playerByName;
-            targetPlayer.userId = userId; // 새로운 접속 ID로 덮어씌움
+            targetPlayer.userId = userId; 
         }
 
+        // 2. 이미 접속중인 닉네임 사용 금지
         if (!targetPlayer && playerByName && !playerByName.isReconnecting) {
             socket.emit('joinError', '이미 게임에 접속해 있는 닉네임입니다.');
             return;
         }
 
+        // 3. [핵심 방어] 다른 탭/브라우저로 다중 접속 시도 원천 차단 (IP 기반)
+        if (!isBot && !targetPlayer) {
+            let sameIpPlayer = room.players.find(p => p.ip === clientIp && !p.isBot);
+            if (sameIpPlayer) {
+                socket.emit('joinError', '이 방에 이미 귀하의 기기/네트워크로 접속된 캐릭터가 있습니다. 기존 닉네임으로 재접속해주세요.');
+                return;
+            }
+        }
+
+        // 정상 접속 처리
         if (targetPlayer) {
             const oldId = targetPlayer.id;
             const newId = socket.id;
+            
+            // 💡 [핵심 방어] 같은 브라우저 새 탭으로 접속하여 세션을 가로채면, 이전 탭은 강제로 튕겨냄!
+            if (oldId && oldId !== newId) {
+                io.to(oldId).emit('joinError', '다른 탭/창에서 접속이 감지되어 연결이 끊어졌습니다.');
+                const oldSocket = io.sockets.sockets.get(oldId);
+                if (oldSocket) oldSocket.leave(roomCode);
+            }
+
             targetPlayer.id = newId;
+            targetPlayer.ip = clientIp; // IP 업데이트
             targetPlayer.isReconnecting = false;
             targetPlayer.disconnectTime = null;
 
@@ -150,8 +174,9 @@ io.on('connection', (socket) => {
                 socket.emit('roomUpdate', sanitizeRoom(room));
                 return;
             }
-
-            let player = { id: socket.id, userId, name: userName, isBot, ready: false, hand: [], penalties: [], lastClaim: '', isReconnecting: false };
+            
+            // 신규 접속자 객체에 IP 정보(clientIp) 추가
+            let player = { id: socket.id, userId, ip: clientIp, name: userName, isBot, ready: false, hand: [], penalties: [], lastClaim: '', isReconnecting: false };
             room.players.push(player);
         }
         
