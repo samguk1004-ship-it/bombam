@@ -29,10 +29,9 @@ const disconnectTimeouts = {};
 function sanitizeRoom(room) { return room; }
 
 function resolveResponseLogic(room, roomCode, guessIsTrue) {
-    // 💡 [수정] 진행 중복 차단: 현재 상태가 RESPONSE일 때만 결과 처리 실행
     if (!room || !room.activeOffer || room.phase !== 'RESPONSE') return;
 
-    room.phase = 'REVEAL'; // 💡 [수정] 처리 즉시 상태를 변경하여 다른 봇들의 중복 요청 원천 차단
+    room.phase = 'REVEAL'; 
 
     const { card, claim, receiverId, seenIds } = room.activeOffer;
     const attackerId = seenIds[seenIds.length - 1]; 
@@ -68,8 +67,6 @@ function resolveResponseLogic(room, roomCode, guessIsTrue) {
         r.activeOffer = null;
         r.revealData = null;
         r.turnId = penaltyId; 
-        
-        // 💡 [핵심 수정] 봇 먹통 원인 해결: 'IDLE' 대신 'GAME'으로 설정하여 봇이 다음 턴을 정상 인식하게 함
         r.phase = 'GAME'; 
 
         const penaltyLimit = r.players.length >= 7 ? 3 : 4;
@@ -220,7 +217,7 @@ io.on('connection', (socket) => {
                                 if (isActive) {
                                     r.activeOffer = null;
                                     r.revealData = null;
-                                    r.phase = 'GAME'; // 💡 [수정] 튕긴 후 턴 리셋시에도 IDLE이 아닌 GAME으로 변경
+                                    r.phase = 'GAME'; 
                                     if (r.players.length > 0) {
                                         r.turnId = r.players[Math.floor(Math.random() * r.players.length)].id;
                                     }
@@ -280,7 +277,17 @@ io.on('connection', (socket) => {
         
         room.players.forEach(p => { p.handCount = p.hand.length; });
         room.phase = 'GAME';
-        room.turnId = room.players[0].id;
+
+        // 💡 [핵심 수정] 턴 지정 로직 (봇게임 선공 / 멀티게임 랜덤)
+        const humanPlayers = room.players.filter(p => !p.isBot);
+        if (humanPlayers.length === 1 && room.players.some(p => p.isBot)) {
+            // 혼자하기 모드: 방 안의 진짜 사람(1명)이 선공
+            room.turnId = humanPlayers[0].id;
+        } else {
+            // 멀티플레이 모드: 모든 플레이어 중에서 랜덤 선공
+            room.turnId = room.players[Math.floor(Math.random() * room.players.length)].id;
+        }
+
         room.activeOffer = null;
         room.revealData = null;
         
@@ -289,7 +296,6 @@ io.on('connection', (socket) => {
 
     socket.on('submitOffer', ({ roomCode, targetId, card, claim }) => {
         const room = rooms[roomCode];
-        // 💡 [수정] 정확히 GAME 상태일 때만, 그리고 activeOffer가 없을 때만 공격을 허용
         if (!room || room.phase !== 'GAME' || room.activeOffer) return;
         
         const attacker = room.players.find(p => p.id === socket.id);
@@ -307,7 +313,6 @@ io.on('connection', (socket) => {
 
     socket.on('submitPass', ({ roomCode, nextTargetId, newClaim }) => {
         const room = rooms[roomCode];
-        // 💡 [수정] 정확히 RESPONSE 상태일 때만 허용
         if (!room || room.phase !== 'RESPONSE' || !room.activeOffer) return;
         
         const passer = room.players.find(p => p.id === socket.id);
@@ -335,7 +340,6 @@ io.on('connection', (socket) => {
         const targetPlayer = room.players.find(p => p.id === targetId);
         if(!targetPlayer) return;
 
-        // 💡 [수정] 타임아웃 강제 행동 처리 로직도 명확하게 수정
         if (room.phase === 'GAME' && room.turnId === targetId && !room.activeOffer) {
             if (targetPlayer.hand.length > 0) {
                 const rCard = targetPlayer.hand[Math.floor(Math.random() * targetPlayer.hand.length)];
