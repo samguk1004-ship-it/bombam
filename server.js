@@ -283,9 +283,9 @@ flip7Io.on('connection', (socket) => {
         socket.to(roomCode).emit('provideGameState'); 
     });
 
-    // ⭐️ [복구 기능] 요청을 받은 유저가 데이터를 보내오면 방 전체에 뿌림
+    // ⭐️ [핵심 수정 - 서버 렉 해결] 데이터를 보낸 본인(나)을 제외하고, 방의 나머지 인원에게만 전송 (무한 루프 핑퐁 방지)
     socket.on('sendGameStateSync', ({ roomCode, gameState }) => {
-        flip7Io.to(roomCode).emit('updateGameStateSync', gameState);
+        socket.broadcast.to(roomCode).emit('updateGameStateSync', gameState);
     });
 
     socket.on('leaveRoom', (roomCode) => leaveFlip7Room(socket, roomCode));
