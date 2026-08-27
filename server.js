@@ -253,10 +253,6 @@ flip7Io.on('connection', (socket) => {
                 delete room.timers[userId];
                 flip7Io.to(roomCode).emit('playerReconnected', { id: socket.id, userId, name: userName });
             }
-            
-            // ⭐️ 재접속한 유저를 위해 다른 사람들에게 게임 상태를 보내달라고 요청
-            flip7Io.to(roomCode).emit('requestGameStateSync');
-            
         } else {
             room.players.push({ 
                 id: socket.id, userId, name: userName, isBot, 
@@ -282,7 +278,12 @@ flip7Io.on('connection', (socket) => {
         }
     });
 
-    // ⭐️ 클라이언트가 자신의 게임 상태를 보내오면 전체 방에 뿌려줌 (새로고침 복구용)
+    // ⭐️ [복구 기능] 클라이언트가 동기화를 요청하면 방 안의 다른 사람들에게 달라고 알림
+    socket.on('requestSyncFromOthers', (roomCode) => {
+        socket.to(roomCode).emit('provideGameState'); 
+    });
+
+    // ⭐️ [복구 기능] 요청을 받은 유저가 데이터를 보내오면 방 전체에 뿌림
     socket.on('sendGameStateSync', ({ roomCode, gameState }) => {
         flip7Io.to(roomCode).emit('updateGameStateSync', gameState);
     });
