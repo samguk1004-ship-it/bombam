@@ -7,8 +7,13 @@ const app = express();
 app.use(cors());
 
 const server = http.createServer(app);
+
+// 🚨 핵심 수정 1: pingTimeout과 pingInterval을 상향 조정하여 
+// 무선 인터넷 환경이나 무료 호스팅에서의 '서버 지연 및 튕김' 현상을 대폭 개선
 const io = new Server(server, {
-    cors: { origin: "*", methods: ["GET", "POST"] }
+    cors: { origin: "*", methods: ["GET", "POST"] },
+    pingTimeout: 60000, 
+    pingInterval: 25000
 });
 
 // ==========================================
@@ -242,7 +247,6 @@ flip7Io.on('connection', (socket) => {
             return;
         }
 
-        // 재접속 로직 확인
         const existingPlayer = room.players.find(p => p.userId === userId);
         if (existingPlayer) {
             existingPlayer.id = socket.id;
@@ -278,12 +282,11 @@ flip7Io.on('connection', (socket) => {
         }
     });
 
-    // ⭐️ [복구 기능] 클라이언트가 동기화를 요청하면 방 안의 다른 사람들에게 달라고 알림
     socket.on('requestSyncFromOthers', (roomCode) => {
         socket.to(roomCode).emit('provideGameState'); 
     });
 
-    // ⭐️ [핵심 수정 - 서버 렉 해결] 데이터를 보낸 본인(나)을 제외하고, 방의 나머지 인원에게만 전송 (무한 루프 핑퐁 방지)
+    // 🚨 핵심 수정 2: 무한 핑퐁 동기화 버그 방지 (보낸 사람 제외하고 브로드캐스트)
     socket.on('sendGameStateSync', ({ roomCode, gameState }) => {
         socket.broadcast.to(roomCode).emit('updateGameStateSync', gameState);
     });
@@ -302,6 +305,8 @@ flip7Io.on('connection', (socket) => {
                     flip7Io.to(roomCode).emit('playerDisconnected', { id: player.id, userId: player.userId, name: player.name });
                     
                     if (!room.timers) room.timers = {};
+                    
+                    // 🚨 핵심 수정 3: 60초 초과 시 방에서 쫓아내고 남은 인원에게 강퇴 이벤트 전송 (클라이언트에서 새로고침 처리됨)
                     room.timers[player.userId] = setTimeout(() => {
                         room.players = room.players.filter(p => p.userId !== player.userId);
                         flip7Io.to(roomCode).emit('playerKicked', { userId: player.userId, name: player.name });
