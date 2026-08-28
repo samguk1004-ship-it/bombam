@@ -17,24 +17,25 @@ const io = new Server(server, {
 });
 
 // ==========================================
-// 🃏 [1] 바퀴벌레 포커 전용 공간 (원본 100% 유지)
+// 🃏 [1] 바퀴벌레 포커 전용 공간
 // ==========================================
 const pokerIo = io.of('/poker');
 const pokerRooms = {};
 
+// 동물별 고유 prefix(0~9) 부여
 const BASE_ANIMALS = [
-    { id: 'spider', name: '거미', repImg: 'https://masi4882.dothome.co.kr/01.jpg?v=2026' },
-    { id: 'stinkbug', name: '노린재', repImg: 'https://masi4882.dothome.co.kr/11.jpg?v=2026' },
-    { id: 'toad', name: '두꺼비', repImg: 'https://masi4882.dothome.co.kr/21.jpg?v=2026' },
-    { id: 'cockroach', name: '바퀴벌레', repImg: 'https://masi4882.dothome.co.kr/31.jpg?v=2026' },
-    { id: 'scorpion', name: '전갈', repImg: 'https://masi4882.dothome.co.kr/41.jpg?v=2026' },
-    { id: 'bat', name: '박쥐', repImg: 'https://masi4882.dothome.co.kr/51.jpg?v=2026' },
-    { id: 'rat', name: '쥐', repImg: 'https://masi4882.dothome.co.kr/61.jpg?v=2026' },
-    { id: 'fly', name: '파리', repImg: 'https://masi4882.dothome.co.kr/71.jpg?v=2026' }
+    { id: 'spider', name: '거미', prefix: '0', repImg: 'https://masi4882.dothome.co.kr/01.jpg?v=2026' },
+    { id: 'stinkbug', name: '노린재', prefix: '1', repImg: 'https://masi4882.dothome.co.kr/11.jpg?v=2026' },
+    { id: 'toad', name: '두꺼비', prefix: '2', repImg: 'https://masi4882.dothome.co.kr/21.jpg?v=2026' },
+    { id: 'cockroach', name: '바퀴벌레', prefix: '3', repImg: 'https://masi4882.dothome.co.kr/31.jpg?v=2026' },
+    { id: 'scorpion', name: '전갈', prefix: '4', repImg: 'https://masi4882.dothome.co.kr/41.jpg?v=2026' },
+    { id: 'bat', name: '박쥐', prefix: '5', repImg: 'https://masi4882.dothome.co.kr/51.jpg?v=2026' },
+    { id: 'rat', name: '쥐', prefix: '6', repImg: 'https://masi4882.dothome.co.kr/61.jpg?v=2026' },
+    { id: 'fly', name: '파리', prefix: '7', repImg: 'https://masi4882.dothome.co.kr/71.jpg?v=2026' }
 ];
 const EXTENDED_ANIMALS = [ ...BASE_ANIMALS, 
-    { id: 'mosquito', name: '모기', repImg: 'https://masi4882.dothome.co.kr/81.jpg?v=2026' }, 
-    { id: 'snake', name: '뱀', repImg: 'https://masi4882.dothome.co.kr/91.jpg?v=2026' } 
+    { id: 'mosquito', name: '모기', prefix: '8', repImg: 'https://masi4882.dothome.co.kr/81.jpg?v=2026' }, 
+    { id: 'snake', name: '뱀', prefix: '9', repImg: 'https://masi4882.dothome.co.kr/91.jpg?v=2026' } 
 ];
 
 pokerIo.on('connection', (socket) => {
@@ -71,19 +72,27 @@ pokerIo.on('connection', (socket) => {
             if (!room || room.players.length === 0) return;
             if (room.players[0].id !== socket.id) return; 
 
-            const useAnimals = room.players.length >= 7 ? EXTENDED_ANIMALS : BASE_ANIMALS;
+            // 🔥 수정됨: 인원수에 따라 동물 종류와 장수를 유동적으로 조절
+            const isExtended = room.players.length >= 7;
+            const useAnimals = isExtended ? EXTENDED_ANIMALS : BASE_ANIMALS;
+            const cardsPerAnimal = isExtended ? 10 : 8; // 7~8인이면 동물당 10장 (0~9 사용)
+            
             let deck = [];
 
             useAnimals.forEach(animal => {
-                for (let i = 0; i < 8; i++) {
+                // cardsPerAnimal 값에 따라 2~6인은 i가 0~7(8장), 7~8인은 0~9(10장)까지 반복
+                for (let i = 0; i < cardsPerAnimal; i++) {
+                    const imgNum = i === 0 ? `${animal.prefix}0` : `${animal.prefix}${i}`;
+                    const specificImg = `https://masi4882.dothome.co.kr/${imgNum}.jpg?v=2026`;
+
                     deck.push({
                         id: i === 0 ? `${animal.id}_king` : `${animal.id}_${i}`,
                         animalId: animal.id,
                         animalName: animal.name,
                         name: animal.name,
                         isKing: i === 0,
-                        img: animal.repImg,
-                        repImg: animal.repImg
+                        img: specificImg, 
+                        repImg: animal.repImg 
                     });
                 }
             });
@@ -237,7 +246,7 @@ function leavePokerRoom(socket, roomCode) {
 
 
 // ==========================================
-// 🎯 [2] 플립 7 전용 공간 (Namespace: /flip7) - 🔥 최적화 적용
+// 🎯 [2] 플립 7 전용 공간 (Namespace: /flip7)
 // ==========================================
 const flip7Io = io.of('/flip7');
 const flip7Rooms = {};
@@ -252,7 +261,6 @@ flip7Io.on('connection', (socket) => {
             }
             const room = flip7Rooms[roomCode];
 
-            // 닉네임 중복 방지
             const existingName = room.players.find(p => p.name === userName && p.userId !== userId);
             if (existingName) {
                 socket.emit('joinError', '현재 대기방에 동일한 닉네임이 존재합니다. 다른 닉네임으로 접속해주세요.');
@@ -261,10 +269,9 @@ flip7Io.on('connection', (socket) => {
 
             const existingPlayer = room.players.find(p => p.userId === userId);
             if (existingPlayer) {
-                // 기존 유저 재접속
                 existingPlayer.id = socket.id;
                 existingPlayer.connected = true;
-                existingPlayer.isSpectator = (room.phase !== 'LOBBY' && room.phase !== 'GAME_OVER'); // 게임 중 접속 시 관전자 설정
+                existingPlayer.isSpectator = (room.phase !== 'LOBBY' && room.phase !== 'GAME_OVER');
                 
                 if (room.timers && room.timers[userId]) {
                     clearTimeout(room.timers[userId]);
@@ -272,7 +279,6 @@ flip7Io.on('connection', (socket) => {
                     flip7Io.to(roomCode).emit('playerReconnected', { id: socket.id, userId, name: userName });
                 }
             } else {
-                // 신규 유저
                 const isSpectator = room.phase !== 'LOBBY';
                 room.players.push({ 
                     id: socket.id, userId, name: userName, isBot, 
@@ -297,16 +303,14 @@ flip7Io.on('connection', (socket) => {
     socket.on('startGame', (roomCode) => {
         try {
             const room = flip7Rooms[roomCode];
-            // 방장 권한 확인 및 상태 강제 동기화
             if (room && room.players.length > 0 && room.players[0].id === socket.id) {
-                room.phase = 'GAME'; // 클라이언트가 온전히 게임 화면으로 넘어가게 세팅
-                room.players.forEach(p => p.isSpectator = false); // 관전자 일괄 해제
+                room.phase = 'GAME'; 
+                room.players.forEach(p => p.isSpectator = false); 
                 flip7Io.to(roomCode).emit('gameStarted', room);
             }
         } catch(e) {}
     });
 
-    // 💡 변경점: 동기화 폭주(Broadcast storm)를 막기 위해 방장(Host) 1명에게만 상태 데이터를 요청함
     socket.on('requestSyncFromOthers', (roomCode) => {
         try {
             const room = flip7Rooms[roomCode];
@@ -334,7 +338,6 @@ flip7Io.on('connection', (socket) => {
                 if (player) {
                     player.connected = false;
                     
-                    // 게임 중 튕겼을 때 60초 유예 처리
                     if ((room.phase === 'PLAYING' || room.phase === 'GAME') && !player.isSpectator) {
                         flip7Io.to(roomCode).emit('playerDisconnected', { id: player.id, userId: player.userId, name: player.name });
                         
@@ -345,7 +348,6 @@ flip7Io.on('connection', (socket) => {
                                 room.players = room.players.filter(p => p.userId !== player.userId);
                                 flip7Io.to(roomCode).emit('playerKicked', { userId: player.userId, name: player.name });
                                 
-                                // 사람 유저가 아무도 안남았으면 방 삭제
                                 if (room.players.filter(p => !p.isSpectator && !p.isBot).length === 0) {
                                     delete flip7Rooms[roomCode];
                                 } else {
@@ -355,7 +357,6 @@ flip7Io.on('connection', (socket) => {
                             } catch(err) {}
                         }, 60000); 
                     } else {
-                        // 대기실에서 나간 경우 즉시 방 삭제 / 방장 인계
                         room.players = room.players.filter(p => p.id !== socket.id);
                         if (room.players.filter(p => !p.isSpectator && !p.isBot).length === 0) {
                             delete flip7Rooms[roomCode];
