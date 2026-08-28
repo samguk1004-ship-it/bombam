@@ -86,7 +86,8 @@ pokerIo.on('connection', (socket) => {
             if (!pokerRooms[roomCode]) pokerRooms[roomCode] = { roomCode, phase: 'LOBBY', players: [], spectators: [], timers: {}, paused: false };
             const room = pokerRooms[roomCode];
             
-            let existingPlayer = room.players.find(p => p.userId === userId || p.name === userName);
+            // 💡 [수정됨] userId가 undefined일 때 봇들끼리 덮어씌워지는 현상 방지
+            let existingPlayer = room.players.find(p => (userId && p.userId === userId) || (userName && p.name === userName));
             
             if (room.phase !== 'LOBBY' && room.phase !== 'GAME_OVER') {
                 if (existingPlayer) {
@@ -97,7 +98,6 @@ pokerIo.on('connection', (socket) => {
                     existingPlayer.isReconnecting = false;
                     existingPlayer.connected = true;
 
-                    // 💡 [버그 수정 1] 재접속 시 게임 내에서 사용되던 옛날 ID를 모두 새로운 Socket ID로 교체!
                     if (room.turnId === oldId) room.turnId = newId;
                     if (room.activeOffer) {
                         if (room.activeOffer.senderId === oldId) room.activeOffer.senderId = newId;
@@ -360,7 +360,6 @@ pokerIo.on('connection', (socket) => {
                                         r.phase = 'GAME_OVER';
                                         r.loserId = player.id; 
                                     } else {
-                                        // 💡 [추가 요청 수정] 퇴장한 플레이어의 턴일 경우, 남은 플레이어 중 "랜덤"하게 턴을 부여
                                         if (isTheirTurn || isTheirResponse) {
                                             r.phase = 'GAME';
                                             r.activeOffer = null;
@@ -438,7 +437,7 @@ flip7Io.on('connection', (socket) => {
                 return;
             }
 
-            const existingPlayer = room.players.find(p => p.userId === userId);
+            let existingPlayer = room.players.find(p => (userId && p.userId === userId) || (userName && p.name === userName));
             if (existingPlayer) {
                 existingPlayer.id = socket.id;
                 existingPlayer.connected = true;
