@@ -4,20 +4,42 @@ const { Server } = require('socket.io');
 const cors = require('cors');
 
 const app = express();
-app.use(cors());
+
+// 🚨 접속 불량 해결 1: CORS 정책을 가장 관대하게 허용
+app.use(cors({
+    origin: '*',
+    methods: ['GET', 'POST', 'OPTIONS'],
+    credentials: true
+}));
+
+// 🚨 접속 불량 해결 2: 서버가 깨어있는지 브라우저에서 바로 확인하기 위한 주소창 화면 설정
+app.get('/', (req, res) => {
+    res.send(`
+        <div style="font-family: sans-serif; text-align: center; margin-top: 20%;">
+            <h1 style="color: #4ade80;">✅ 게임 서버가 정상적으로 켜져 있습니다!</h1>
+            <p>이제 게임 화면으로 돌아가서 '새로고침'을 누르고 접속해주세요.</p>
+        </div>
+    `);
+});
 
 const server = http.createServer(app);
 
-// 🚨 에러 및 튕김 방지: Node.js 서버 안정성 강화를 위한 연결 옵션
+// 🚨 접속 불량 해결 3: Render 환경에 맞춘 유연한 소켓 통신 설정 (웹소켓 & 폴링 모두 허용)
 const io = new Server(server, {
-    cors: { origin: "*", methods: ["GET", "POST"] },
+    cors: { 
+        origin: "*", 
+        methods: ["GET", "POST", "OPTIONS"] 
+    },
     pingTimeout: 60000, 
     pingInterval: 25000,
-    connectTimeout: 45000 
+    connectTimeout: 45000,
+    transports: ['polling', 'websocket'],
+    allowEIO3: true
 });
 
+
 // ==========================================
-// 🃏 [1] 바퀴벌레 포커 전용 공간
+// 🃏 [1] 바퀴벌레 포커 전용 공간 (Namespace: /poker)
 // ==========================================
 const pokerIo = io.of('/poker');
 const pokerRooms = {};
@@ -72,7 +94,7 @@ pokerIo.on('connection', (socket) => {
             if (!room || room.players.length === 0) return;
             if (room.players[0].id !== socket.id) return; 
 
-            // 🔥 수정됨: 인원수에 따라 동물 종류와 장수를 유동적으로 조절
+            // 🔥 인원수에 따라 동물 종류와 장수를 유동적으로 조절
             const isExtended = room.players.length >= 7;
             const useAnimals = isExtended ? EXTENDED_ANIMALS : BASE_ANIMALS;
             const cardsPerAnimal = isExtended ? 10 : 8; // 7~8인이면 동물당 10장 (0~9 사용)
@@ -80,7 +102,6 @@ pokerIo.on('connection', (socket) => {
             let deck = [];
 
             useAnimals.forEach(animal => {
-                // cardsPerAnimal 값에 따라 2~6인은 i가 0~7(8장), 7~8인은 0~9(10장)까지 반복
                 for (let i = 0; i < cardsPerAnimal; i++) {
                     const imgNum = i === 0 ? `${animal.prefix}0` : `${animal.prefix}${i}`;
                     const specificImg = `https://masi4882.dothome.co.kr/${imgNum}.jpg?v=2026`;
@@ -267,11 +288,12 @@ flip7Io.on('connection', (socket) => {
                 return;
             }
 
+            // 🔥 userId 기반으로 동일 유저 식별 (관전 버그 원천 차단)
             const existingPlayer = room.players.find(p => p.userId === userId);
             if (existingPlayer) {
-                existingPlayer.id = socket.id;
+                existingPlayer.id = socket.id; // 최신 소켓 ID로 갱신
                 existingPlayer.connected = true;
-                existingPlayer.isSpectator = (room.phase !== 'LOBBY' && room.phase !== 'GAME_OVER');
+                existingPlayer.isSpectator = (room.phase !== 'LOBBY' && room.phase !== 'GAME_OVER' && existingPlayer.isSpectator !== false);
                 
                 if (room.timers && room.timers[userId]) {
                     clearTimeout(room.timers[userId]);
@@ -394,5 +416,5 @@ function leaveFlip7Room(socket, roomCode) {
     } catch(e) {}
 }
 
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 10000;
 server.listen(PORT, () => { console.log(`🚀 서버 구동 완료: 안정성 100% 강화 버전. 포트 ${PORT}`); });
