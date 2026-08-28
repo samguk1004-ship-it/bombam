@@ -52,7 +52,6 @@ const EXTENDED_ANIMALS = [ ...BASE_ANIMALS,
     { id: 'snake', name: '뱀', prefix: '9', repImg: 'https://masi4882.dothome.co.kr/91.jpg?v=2026' } 
 ];
 
-// 게임 종료 여부 확인 공통 함수
 function checkGameOver(currentRoom, roomCode) {
     try {
         if (!pokerRooms[roomCode]) return;
@@ -84,7 +83,6 @@ pokerIo.on('connection', (socket) => {
     socket.on('joinRoom', ({ roomCode, userName, userId, isBot }) => {
         try {
             socket.join(roomCode);
-            // timers와 spectators 배열을 추가로 초기화
             if (!pokerRooms[roomCode]) pokerRooms[roomCode] = { roomCode, phase: 'LOBBY', players: [], spectators: [], timers: {}, paused: false };
             const room = pokerRooms[roomCode];
             
@@ -92,7 +90,6 @@ pokerIo.on('connection', (socket) => {
             
             if (room.phase !== 'LOBBY' && room.phase !== 'GAME_OVER') {
                 if (existingPlayer) {
-                    // 기존 유저 재접속
                     existingPlayer.id = socket.id;
                     existingPlayer.isReconnecting = false;
                     existingPlayer.connected = true;
@@ -101,13 +98,11 @@ pokerIo.on('connection', (socket) => {
                         delete room.timers[existingPlayer.userId];
                     }
 
-                    // 모든 플레이어가 복귀했는지 확인하여 게임 재개(Unpause)
                     const stillReconnecting = room.players.some(p => p.isReconnecting);
                     if (!stillReconnecting) {
                         room.paused = false;
                     }
                 } else {
-                    // 관전자 모드로 정확히 연결
                     if (!room.spectators) room.spectators = [];
                     if (!room.spectators.find(s => s.userId === userId)) {
                         room.spectators.push({ id: socket.id, userId, name: userName });
@@ -311,7 +306,6 @@ pokerIo.on('connection', (socket) => {
 
     socket.on('leaveRoom', (roomCode) => leavePokerRoom(socket, roomCode));
     
-    // 게임 중 튕길 경우 -> 게임을 멈추고(Paused) 30초 대기
     socket.on('disconnect', () => { 
         for (const roomCode in pokerRooms) {
             try {
@@ -321,7 +315,7 @@ pokerIo.on('connection', (socket) => {
                     player.connected = false;
                     if (room.phase === 'GAME' || room.phase === 'RESPONSE' || room.phase === 'REVEAL') {
                         player.isReconnecting = true;
-                        room.paused = true; // 🌟 30초 동안 게임 강제 일시정지 상태 부여
+                        room.paused = true; 
                         
                         if (!room.timers) room.timers = {};
                         
@@ -333,9 +327,8 @@ pokerIo.on('connection', (socket) => {
                                 const isTheirTurn = r.phase === 'GAME' && r.turnId === player.id;
                                 const isTheirResponse = r.phase === 'RESPONSE' && r.activeOffer && r.activeOffer.receiverId === player.id;
 
-                                r.players = r.players.filter(p => p.userId !== player.userId); // 유저 강제 제외 처리
+                                r.players = r.players.filter(p => p.userId !== player.userId);
                                 
-                                // 남아있는 다른 접속 끊긴 유저가 없으면 일시정지 해제
                                 const stillReconnecting = r.players.some(p => p.isReconnecting);
                                 if (!stillReconnecting) {
                                     r.paused = false;
@@ -349,7 +342,6 @@ pokerIo.on('connection', (socket) => {
                                         r.loserId = player.id; 
                                     } else {
                                         if (isTheirTurn || isTheirResponse) {
-                                            // 턴 꼬임 방지를 위해 강제 종료된 유저 턴을 다음 방장으로 초기화하여 게임 이어감
                                             r.phase = 'GAME';
                                             r.activeOffer = null;
                                             r.turnId = r.players[0].id; 
@@ -359,11 +351,10 @@ pokerIo.on('connection', (socket) => {
                                 }
                                 delete r.timers[player.userId];
                             } catch(err) {}
-                        }, 30000); // 🌟 30초 후 영구 제외
+                        }, 30000); 
                         
                         pokerIo.to(roomCode).emit('roomUpdate', room);
                     } else {
-                        // 대기실이나 결과 화면에서는 즉시 퇴장
                         room.players = room.players.filter(p => p.id !== socket.id);
                         if (room.players.filter(p => !p.isBot).length === 0) delete pokerRooms[roomCode];
                         else pokerIo.to(roomCode).emit('roomUpdate', room);
@@ -403,7 +394,6 @@ function leavePokerRoom(socket, roomCode) {
         }
     } catch(e) {}
 }
-
 
 // ==========================================
 // 🎯 [2] 플립 7 전용 (Namespace: /flip7)
