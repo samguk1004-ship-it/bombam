@@ -90,9 +90,28 @@ pokerIo.on('connection', (socket) => {
             
             if (room.phase !== 'LOBBY' && room.phase !== 'GAME_OVER') {
                 if (existingPlayer) {
-                    existingPlayer.id = socket.id;
+                    const oldId = existingPlayer.id;
+                    const newId = socket.id;
+                    
+                    existingPlayer.id = newId;
                     existingPlayer.isReconnecting = false;
                     existingPlayer.connected = true;
+
+                    // 💡 [버그 수정 1] 재접속 시 게임 내에서 사용되던 옛날 ID를 모두 새로운 Socket ID로 교체!
+                    if (room.turnId === oldId) room.turnId = newId;
+                    if (room.activeOffer) {
+                        if (room.activeOffer.senderId === oldId) room.activeOffer.senderId = newId;
+                        if (room.activeOffer.attackerId === oldId) room.activeOffer.attackerId = newId;
+                        if (room.activeOffer.receiverId === oldId) room.activeOffer.receiverId = newId;
+                        if (room.activeOffer.seenIds) {
+                            room.activeOffer.seenIds = room.activeOffer.seenIds.map(id => id === oldId ? newId : id);
+                        }
+                    }
+                    if (room.revealData) {
+                        if (room.revealData.winnerId === oldId) room.revealData.winnerId = newId;
+                        if (room.revealData.penaltyId === oldId) room.revealData.penaltyId = newId;
+                    }
+
                     if (room.timers && room.timers[existingPlayer.userId]) {
                         clearTimeout(room.timers[existingPlayer.userId]);
                         delete room.timers[existingPlayer.userId];
@@ -341,10 +360,13 @@ pokerIo.on('connection', (socket) => {
                                         r.phase = 'GAME_OVER';
                                         r.loserId = player.id; 
                                     } else {
+                                        // 💡 [추가 요청 수정] 퇴장한 플레이어의 턴일 경우, 남은 플레이어 중 "랜덤"하게 턴을 부여
                                         if (isTheirTurn || isTheirResponse) {
                                             r.phase = 'GAME';
                                             r.activeOffer = null;
-                                            r.turnId = r.players[0].id; 
+                                            const remainingPlayers = r.players;
+                                            const randomPlayer = remainingPlayers[Math.floor(Math.random() * remainingPlayers.length)];
+                                            r.turnId = randomPlayer.id; 
                                         }
                                     }
                                     pokerIo.to(roomCode).emit('roomUpdate', r);
