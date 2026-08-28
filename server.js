@@ -17,7 +17,7 @@ const io = new Server(server, {
 });
 
 // ==========================================
-// 🃏 [1] 바퀴벌레 포커 전용 공간
+// 🃏 [1] 바퀴벌레 포커 전용 공간 (원본 100% 유지)
 // ==========================================
 const pokerIo = io.of('/poker');
 const pokerRooms = {};
@@ -237,7 +237,7 @@ function leavePokerRoom(socket, roomCode) {
 
 
 // ==========================================
-// 🎯 [2] 플립 7 전용 공간 (Namespace: /flip7)
+// 🎯 [2] 플립 7 전용 공간 (Namespace: /flip7) - 🔥 최적화 적용
 // ==========================================
 const flip7Io = io.of('/flip7');
 const flip7Rooms = {};
@@ -252,6 +252,7 @@ flip7Io.on('connection', (socket) => {
             }
             const room = flip7Rooms[roomCode];
 
+            // 닉네임 중복 방지
             const existingName = room.players.find(p => p.name === userName && p.userId !== userId);
             if (existingName) {
                 socket.emit('joinError', '현재 대기방에 동일한 닉네임이 존재합니다. 다른 닉네임으로 접속해주세요.');
@@ -260,8 +261,10 @@ flip7Io.on('connection', (socket) => {
 
             const existingPlayer = room.players.find(p => p.userId === userId);
             if (existingPlayer) {
+                // 기존 유저 재접속
                 existingPlayer.id = socket.id;
                 existingPlayer.connected = true;
+                existingPlayer.isSpectator = (room.phase !== 'LOBBY' && room.phase !== 'GAME_OVER'); // 게임 중 접속 시 관전자 설정
                 
                 if (room.timers && room.timers[userId]) {
                     clearTimeout(room.timers[userId]);
@@ -269,6 +272,7 @@ flip7Io.on('connection', (socket) => {
                     flip7Io.to(roomCode).emit('playerReconnected', { id: socket.id, userId, name: userName });
                 }
             } else {
+                // 신규 유저
                 const isSpectator = room.phase !== 'LOBBY';
                 room.players.push({ 
                     id: socket.id, userId, name: userName, isBot, 
@@ -293,15 +297,26 @@ flip7Io.on('connection', (socket) => {
     socket.on('startGame', (roomCode) => {
         try {
             const room = flip7Rooms[roomCode];
+            // 방장 권한 확인 및 상태 강제 동기화
             if (room && room.players.length > 0 && room.players[0].id === socket.id) {
-                room.phase = 'PLAYING';
+                room.phase = 'GAME'; // 클라이언트가 온전히 게임 화면으로 넘어가게 세팅
+                room.players.forEach(p => p.isSpectator = false); // 관전자 일괄 해제
                 flip7Io.to(roomCode).emit('gameStarted', room);
             }
         } catch(e) {}
     });
 
+    // 💡 변경점: 동기화 폭주(Broadcast storm)를 막기 위해 방장(Host) 1명에게만 상태 데이터를 요청함
     socket.on('requestSyncFromOthers', (roomCode) => {
-        try { socket.to(roomCode).emit('provideGameState'); } catch(e) {}
+        try {
+            const room = flip7Rooms[roomCode];
+            if (room && room.players.length > 0) {
+                const hostId = room.players.find(p => !p.isBot)?.id;
+                if (hostId) {
+                    flip7Io.to(hostId).emit('provideGameState');
+                }
+            }
+        } catch(e) {}
     });
 
     socket.on('sendGameStateSync', ({ roomCode, gameState }) => {
@@ -319,6 +334,7 @@ flip7Io.on('connection', (socket) => {
                 if (player) {
                     player.connected = false;
                     
+                    // 게임 중 튕겼을 때 60초 유예 처리
                     if ((room.phase === 'PLAYING' || room.phase === 'GAME') && !player.isSpectator) {
                         flip7Io.to(roomCode).emit('playerDisconnected', { id: player.id, userId: player.userId, name: player.name });
                         
@@ -328,15 +344,18 @@ flip7Io.on('connection', (socket) => {
                             try {
                                 room.players = room.players.filter(p => p.userId !== player.userId);
                                 flip7Io.to(roomCode).emit('playerKicked', { userId: player.userId, name: player.name });
-                                flip7Io.to(roomCode).emit('roomUpdate', room);
-                                delete room.timers[player.userId];
                                 
+                                // 사람 유저가 아무도 안남았으면 방 삭제
                                 if (room.players.filter(p => !p.isSpectator && !p.isBot).length === 0) {
                                     delete flip7Rooms[roomCode];
+                                } else {
+                                    flip7Io.to(roomCode).emit('roomUpdate', room);
                                 }
+                                delete room.timers[player.userId];
                             } catch(err) {}
                         }, 60000); 
                     } else {
+                        // 대기실에서 나간 경우 즉시 방 삭제 / 방장 인계
                         room.players = room.players.filter(p => p.id !== socket.id);
                         if (room.players.filter(p => !p.isSpectator && !p.isBot).length === 0) {
                             delete flip7Rooms[roomCode];
