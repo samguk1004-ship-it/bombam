@@ -5,31 +5,25 @@ const cors = require('cors');
 
 const app = express();
 
-// 🚨 접속 불량 해결 1: CORS 정책을 가장 관대하게 허용
 app.use(cors({
     origin: '*',
     methods: ['GET', 'POST', 'OPTIONS'],
     credentials: true
 }));
 
-// 🚨 접속 불량 해결 2: 서버가 깨어있는지 브라우저에서 바로 확인하기 위한 주소창 화면 설정
 app.get('/', (req, res) => {
     res.send(`
         <div style="font-family: sans-serif; text-align: center; margin-top: 20%;">
-            <h1 style="color: #4ade80;">✅ 게임 서버가 정상적으로 켜져 있습니다!</h1>
-            <p>이제 게임 화면으로 돌아가서 '새로고침'을 누르고 접속해주세요.</p>
+            <h1 style="color: #4ade80;">✅ 게임 서버 정상 작동 중!</h1>
+            <p>포커와 플립7 모두 접속 가능한 상태입니다.</p>
         </div>
     `);
 });
 
 const server = http.createServer(app);
 
-// 🚨 접속 불량 해결 3: Render 환경에 맞춘 유연한 소켓 통신 설정 (웹소켓 & 폴링 모두 허용)
 const io = new Server(server, {
-    cors: { 
-        origin: "*", 
-        methods: ["GET", "POST", "OPTIONS"] 
-    },
+    cors: { origin: "*", methods: ["GET", "POST", "OPTIONS"] },
     pingTimeout: 60000, 
     pingInterval: 25000,
     connectTimeout: 45000,
@@ -37,14 +31,12 @@ const io = new Server(server, {
     allowEIO3: true
 });
 
-
 // ==========================================
-// 🃏 [1] 바퀴벌레 포커 전용 공간 (Namespace: /poker)
+// 🃏 [1] 바퀴벌레 포커 전용 (Namespace: /poker)
 // ==========================================
 const pokerIo = io.of('/poker');
 const pokerRooms = {};
 
-// 동물별 고유 prefix(0~9) 부여
 const BASE_ANIMALS = [
     { id: 'spider', name: '거미', prefix: '0', repImg: 'https://masi4882.dothome.co.kr/01.jpg?v=2026' },
     { id: 'stinkbug', name: '노린재', prefix: '1', repImg: 'https://masi4882.dothome.co.kr/11.jpg?v=2026' },
@@ -75,7 +67,7 @@ pokerIo.on('connection', (socket) => {
                 });
             }
             pokerIo.to(roomCode).emit('roomUpdate', room);
-        } catch(e) { console.error("Poker Join Error:", e); }
+        } catch(e) {}
     });
 
     socket.on('playerReady', ({ roomCode, ready }) => {
@@ -94,13 +86,11 @@ pokerIo.on('connection', (socket) => {
             if (!room || room.players.length === 0) return;
             if (room.players[0].id !== socket.id) return; 
 
-            // 🔥 인원수에 따라 동물 종류와 장수를 유동적으로 조절
             const isExtended = room.players.length >= 7;
             const useAnimals = isExtended ? EXTENDED_ANIMALS : BASE_ANIMALS;
-            const cardsPerAnimal = isExtended ? 10 : 8; // 7~8인이면 동물당 10장 (0~9 사용)
+            const cardsPerAnimal = isExtended ? 10 : 8; 
             
             let deck = [];
-
             useAnimals.forEach(animal => {
                 for (let i = 0; i < cardsPerAnimal; i++) {
                     const imgNum = i === 0 ? `${animal.prefix}0` : `${animal.prefix}${i}`;
@@ -108,12 +98,8 @@ pokerIo.on('connection', (socket) => {
 
                     deck.push({
                         id: i === 0 ? `${animal.id}_king` : `${animal.id}_${i}`,
-                        animalId: animal.id,
-                        animalName: animal.name,
-                        name: animal.name,
-                        isKing: i === 0,
-                        img: specificImg, 
-                        repImg: animal.repImg 
+                        animalId: animal.id, animalName: animal.name, name: animal.name,
+                        isKing: i === 0, img: specificImg, repImg: animal.repImg 
                     });
                 }
             });
@@ -128,18 +114,11 @@ pokerIo.on('connection', (socket) => {
             let dealIndex = 0;
             while (dealIndex < deck.length) {
                 room.players.forEach(p => {
-                    if (dealIndex < deck.length) {
-                        p.hand.push(deck[dealIndex]);
-                        p.handCount++;
-                        dealIndex++;
-                    }
+                    if (dealIndex < deck.length) { p.hand.push(deck[dealIndex]); p.handCount++; dealIndex++; }
                 });
             }
 
-            room.phase = 'GAME'; 
-            room.turnId = room.players[0].id;
-            room.activeOffer = null;
-            
+            room.phase = 'GAME'; room.turnId = room.players[0].id; room.activeOffer = null;
             pokerIo.to(roomCode).emit('gameStarted', room);
             pokerIo.to(roomCode).emit('roomUpdate', room);
         } catch(e) {}
@@ -153,9 +132,7 @@ pokerIo.on('connection', (socket) => {
             if (!attacker) return;
 
             attacker.hand = attacker.hand.filter(c => c.id !== card.id);
-            attacker.handCount = attacker.hand.length;
-            attacker.lastClaim = claim;
-
+            attacker.handCount = attacker.hand.length; attacker.lastClaim = claim;
             room.phase = 'RESPONSE';
             room.activeOffer = { senderId: socket.id, attackerId: socket.id, receiverId: targetId, card, claim, seenIds: [socket.id] };
 
@@ -170,11 +147,8 @@ pokerIo.on('connection', (socket) => {
             const player = room.players.find(pl => pl.id === socket.id);
             if (player) player.lastClaim = newClaim;
 
-            room.activeOffer.senderId = socket.id;
-            room.activeOffer.receiverId = nextTargetId;
-            room.activeOffer.claim = newClaim;
-            room.activeOffer.seenIds.push(socket.id);
-
+            room.activeOffer.senderId = socket.id; room.activeOffer.receiverId = nextTargetId;
+            room.activeOffer.claim = newClaim; room.activeOffer.seenIds.push(socket.id);
             pokerIo.to(roomCode).emit('onOffer', room);
         } catch(e) {}
     });
@@ -184,9 +158,7 @@ pokerIo.on('connection', (socket) => {
             const room = pokerRooms[roomCode];
             if (!room || !room.activeOffer || !room.activeOffer.card) return;
 
-            const offer = room.activeOffer;
-            const actualCard = offer.card;
-            
+            const offer = room.activeOffer; const actualCard = offer.card;
             let isTrue = false;
             if (offer.claim === '왕카드') isTrue = (actualCard.isKing === true);
             else isTrue = (actualCard.animalName === offer.claim);
@@ -205,10 +177,7 @@ pokerIo.on('connection', (socket) => {
             }
 
             const loser = room.players.find(p => p.id === loserId);
-            if (loser) {
-                loser.penalties.push(actualCard);
-                if (extraCard) loser.penalties.push(extraCard);
-            }
+            if (loser) { loser.penalties.push(actualCard); if (extraCard) loser.penalties.push(extraCard); }
 
             room.phase = 'REVEAL';
             room.revealData = { winnerId, penaltyId: loserId, guessCorrect, actualCard, claim: offer.claim, extraCard };
@@ -218,8 +187,7 @@ pokerIo.on('connection', (socket) => {
                 try {
                     if (!pokerRooms[roomCode]) return;
                     const currentRoom = pokerRooms[roomCode];
-                    let isGameOver = false;
-                    let finalLoserId = null;
+                    let isGameOver = false; let finalLoserId = null;
                     const penaltyLimit = currentRoom.players.length >= 7 ? 3 : 4;
 
                     currentRoom.players.forEach(p => {
@@ -247,9 +215,7 @@ pokerIo.on('connection', (socket) => {
 
     socket.on('leaveRoom', (roomCode) => leavePokerRoom(socket, roomCode));
     socket.on('disconnect', () => { 
-        try {
-            for (const roomCode in pokerRooms) leavePokerRoom(socket, roomCode); 
-        } catch(e) {}
+        for (const roomCode in pokerRooms) leavePokerRoom(socket, roomCode); 
     });
 });
 
@@ -257,8 +223,7 @@ function leavePokerRoom(socket, roomCode) {
     try {
         const room = pokerRooms[roomCode];
         if (room) {
-            room.players = room.players.filter(p => p.id !== socket.id);
-            socket.leave(roomCode);
+            room.players = room.players.filter(p => p.id !== socket.id); socket.leave(roomCode);
             if (room.players.length === 0) delete pokerRooms[roomCode];
             else { room.players[0].ready = true; pokerIo.to(roomCode).emit('roomUpdate', room); }
         }
@@ -267,13 +232,12 @@ function leavePokerRoom(socket, roomCode) {
 
 
 // ==========================================
-// 🎯 [2] 플립 7 전용 공간 (Namespace: /flip7)
+// 🎯 [2] 플립 7 전용 (Namespace: /flip7) - 🔥 이 부분이 핵심입니다 🔥
 // ==========================================
 const flip7Io = io.of('/flip7');
 const flip7Rooms = {};
 
 flip7Io.on('connection', (socket) => {
-
     socket.on('joinRoom', ({ roomCode, userName, userId, isBot }) => {
         try {
             socket.join(roomCode);
@@ -284,32 +248,29 @@ flip7Io.on('connection', (socket) => {
 
             const existingName = room.players.find(p => p.name === userName && p.userId !== userId);
             if (existingName) {
-                socket.emit('joinError', '현재 대기방에 동일한 닉네임이 존재합니다. 다른 닉네임으로 접속해주세요.');
+                socket.emit('joinError', '동일한 닉네임이 존재합니다.');
                 return;
             }
 
-            // 🔥 userId 기반으로 동일 유저 식별 (관전 버그 원천 차단)
             const existingPlayer = room.players.find(p => p.userId === userId);
             if (existingPlayer) {
-                existingPlayer.id = socket.id; // 최신 소켓 ID로 갱신
+                existingPlayer.id = socket.id;
                 existingPlayer.connected = true;
                 existingPlayer.isSpectator = (room.phase !== 'LOBBY' && room.phase !== 'GAME_OVER' && existingPlayer.isSpectator !== false);
                 
                 if (room.timers && room.timers[userId]) {
-                    clearTimeout(room.timers[userId]);
-                    delete room.timers[userId];
+                    clearTimeout(room.timers[userId]); delete room.timers[userId];
                     flip7Io.to(roomCode).emit('playerReconnected', { id: socket.id, userId, name: userName });
                 }
             } else {
                 const isSpectator = room.phase !== 'LOBBY';
                 room.players.push({ 
                     id: socket.id, userId, name: userName, isBot, 
-                    ready: room.players.length === 0, score: 0, connected: true,
-                    isSpectator: isSpectator
+                    ready: room.players.length === 0, score: 0, connected: true, isSpectator
                 });
             }
             flip7Io.to(roomCode).emit('roomUpdate', room);
-        } catch(e) { console.error("Flip7 Join Error:", e); }
+        } catch(e) {}
     });
 
     socket.on('playerReady', ({ roomCode, ready }) => {
@@ -326,8 +287,7 @@ flip7Io.on('connection', (socket) => {
         try {
             const room = flip7Rooms[roomCode];
             if (room && room.players.length > 0 && room.players[0].id === socket.id) {
-                room.phase = 'GAME'; 
-                room.players.forEach(p => p.isSpectator = false); 
+                room.phase = 'GAME'; room.players.forEach(p => p.isSpectator = false); 
                 flip7Io.to(roomCode).emit('gameStarted', room);
             }
         } catch(e) {}
@@ -338,9 +298,7 @@ flip7Io.on('connection', (socket) => {
             const room = flip7Rooms[roomCode];
             if (room && room.players.length > 0) {
                 const hostId = room.players.find(p => !p.isBot)?.id;
-                if (hostId) {
-                    flip7Io.to(hostId).emit('provideGameState');
-                }
+                if (hostId) flip7Io.to(hostId).emit('provideGameState');
             }
         } catch(e) {}
     });
@@ -359,10 +317,8 @@ flip7Io.on('connection', (socket) => {
                 
                 if (player) {
                     player.connected = false;
-                    
                     if ((room.phase === 'PLAYING' || room.phase === 'GAME') && !player.isSpectator) {
                         flip7Io.to(roomCode).emit('playerDisconnected', { id: player.id, userId: player.userId, name: player.name });
-                        
                         if (!room.timers) room.timers = {};
                         
                         room.timers[player.userId] = setTimeout(() => {
@@ -370,26 +326,19 @@ flip7Io.on('connection', (socket) => {
                                 room.players = room.players.filter(p => p.userId !== player.userId);
                                 flip7Io.to(roomCode).emit('playerKicked', { userId: player.userId, name: player.name });
                                 
-                                if (room.players.filter(p => !p.isSpectator && !p.isBot).length === 0) {
-                                    delete flip7Rooms[roomCode];
-                                } else {
-                                    flip7Io.to(roomCode).emit('roomUpdate', room);
-                                }
+                                if (room.players.filter(p => !p.isSpectator && !p.isBot).length === 0) delete flip7Rooms[roomCode];
+                                else flip7Io.to(roomCode).emit('roomUpdate', room);
                                 delete room.timers[player.userId];
                             } catch(err) {}
                         }, 60000); 
                     } else {
                         room.players = room.players.filter(p => p.id !== socket.id);
-                        if (room.players.filter(p => !p.isSpectator && !p.isBot).length === 0) {
-                            delete flip7Rooms[roomCode];
-                        } else {
-                            if(room.players[0]) room.players[0].ready = true;
-                            flip7Io.to(roomCode).emit('roomUpdate', room);
-                        }
+                        if (room.players.filter(p => !p.isSpectator && !p.isBot).length === 0) delete flip7Rooms[roomCode];
+                        else { if(room.players[0]) room.players[0].ready = true; flip7Io.to(roomCode).emit('roomUpdate', room); }
                     }
                 }
             }
-        } catch(e) { console.error("Disconnect processing error:", e); }
+        } catch(e) {}
     });
 });
 
@@ -399,22 +348,15 @@ function leaveFlip7Room(socket, roomCode) {
         if (room) {
             const player = room.players.find(p => p.id === socket.id);
             if (player && room.timers && room.timers[player.userId]) {
-                clearTimeout(room.timers[player.userId]);
-                delete room.timers[player.userId];
+                clearTimeout(room.timers[player.userId]); delete room.timers[player.userId];
             }
-
-            room.players = room.players.filter(p => p.id !== socket.id);
-            socket.leave(roomCode);
+            room.players = room.players.filter(p => p.id !== socket.id); socket.leave(roomCode);
             
-            if (room.players.filter(p => !p.isSpectator && !p.isBot).length === 0) {
-                delete flip7Rooms[roomCode];
-            } else { 
-                if(room.players[0]) room.players[0].ready = true; 
-                flip7Io.to(roomCode).emit('roomUpdate', room); 
-            }
+            if (room.players.filter(p => !p.isSpectator && !p.isBot).length === 0) delete flip7Rooms[roomCode];
+            else { if(room.players[0]) room.players[0].ready = true; flip7Io.to(roomCode).emit('roomUpdate', room); }
         }
     } catch(e) {}
 }
 
 const PORT = process.env.PORT || 10000;
-server.listen(PORT, () => { console.log(`🚀 서버 구동 완료: 안정성 100% 강화 버전. 포트 ${PORT}`); });
+server.listen(PORT, () => { console.log(`🚀 포커 & 플립7 서버 구동 완료. 포트 ${PORT}`); });
