@@ -5,16 +5,16 @@ const cors = require('cors');
 
 const app = express();
 
-// 🔥 수정됨: credentials: true 제거 (origin: '*' 와 함께 쓰면 브라우저가 접속을 강제 차단함)
 app.use(cors({
     origin: '*',
-    methods: ['GET', 'POST', 'OPTIONS']
+    methods: ['GET', 'POST', 'OPTIONS'],
+    credentials: true
 }));
 
 app.get('/', (req, res) => {
     res.send(`
         <div style="font-family: sans-serif; text-align: center; margin-top: 20%;">
-            <h1 style="color: #4ade80;">✅ 게임 서버 정상 작동 중! (CORS 완벽 허용됨)</h1>
+            <h1 style="color: #4ade80;">✅ 게임 서버 정상 작동 중!</h1>
             <p>포커와 플립7 모두 접속 가능한 상태입니다.</p>
         </div>
     `);
@@ -22,13 +22,12 @@ app.get('/', (req, res) => {
 
 const server = http.createServer(app);
 
-// 🔥 수정됨: 웹소켓(websocket)을 1순위로 배치하고 모든 도메인 허용
 const io = new Server(server, {
     cors: { origin: "*", methods: ["GET", "POST", "OPTIONS"] },
     pingTimeout: 60000, 
     pingInterval: 25000,
     connectTimeout: 45000,
-    transports: ['websocket', 'polling'], 
+    transports: ['polling', 'websocket'],
     allowEIO3: true
 });
 
@@ -60,13 +59,41 @@ pokerIo.on('connection', (socket) => {
             if (!pokerRooms[roomCode]) pokerRooms[roomCode] = { roomCode, phase: 'LOBBY', players: [] };
             const room = pokerRooms[roomCode];
             
-            if (!room.players.find(p => p.id === socket.id)) {
-                room.players.push({
-                    id: socket.id, userId, name: userName, isBot,
-                    ready: room.players.length === 0, 
-                    score: 0, hand: [], penalties: [], handCount: 0
-                });
+            // 기존 플레이어인지 확인 (userId 또는 userName으로 체크)
+            let existingPlayer = room.players.find(p => p.userId === userId || p.name === userName);
+            
+            // 🔥 핵심 로직: 게임이 진행 중일 때 접속 처리
+            if (room.phase !== 'LOBBY' && room.phase !== 'GAME_OVER') {
+                if (existingPlayer) {
+                    // 기존 플레이어가 튕겼다가 재접속한 경우
+                    existingPlayer.id = socket.id;
+                    existingPlayer.isReconnecting = false;
+                } else {
+                    // ⭐️ 게임 중 새롭게 접속한 사람 (관전자) -> players 배열에 넣지 않음
+                    pokerIo.to(roomCode).emit('roomUpdate', room); // 현재 상태만 전달
+                    return; // 함수 종료
+                }
+            } 
+            // 🟢 로비 상태일 때 정상적으로 접속 처리
+            else {
+                if (!existingPlayer) {
+                    room.players.push({
+                        id: socket.id, 
+                        userId, 
+                        name: userName, 
+                        isBot,
+                        ready: room.players.length === 0, 
+                        score: 0, 
+                        hand: [], 
+                        penalties: [], 
+                        handCount: 0,
+                        isReconnecting: false
+                    });
+                } else {
+                    existingPlayer.id = socket.id; // 기존 유저면 소켓 ID 갱신
+                }
             }
+
             pokerIo.to(roomCode).emit('roomUpdate', room);
         } catch(e) {}
     });
@@ -233,7 +260,7 @@ function leavePokerRoom(socket, roomCode) {
 
 
 // ==========================================
-// 🎯 [2] 플립 7 전용 (Namespace: /flip7)
+// 🎯 [2] 플립 7 전용 (Namespace: /flip7) - 🔥 이 부분이 핵심입니다 🔥
 // ==========================================
 const flip7Io = io.of('/flip7');
 const flip7Rooms = {};
