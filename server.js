@@ -8,8 +8,7 @@ app.use(cors());
 
 const server = http.createServer(app);
 
-// 🚨 핵심 수정 1: pingTimeout과 pingInterval을 상향 조정하여 
-// 무선 인터넷 환경이나 무료 호스팅에서의 '서버 지연 및 튕김' 현상을 대폭 개선
+// 서버 지연 및 튕김 방지 옵션
 const io = new Server(server, {
     cors: { origin: "*", methods: ["GET", "POST"] },
     pingTimeout: 60000, 
@@ -17,7 +16,7 @@ const io = new Server(server, {
 });
 
 // ==========================================
-// 🃏 [1] 바퀴벌레 포커 전용 공간 (원본 그대로 유지)
+// 🃏 [1] 바퀴벌레 포커 전용 공간 (원본 완전 동일 유지)
 // ==========================================
 const pokerIo = io.of('/poker');
 const pokerRooms = {};
@@ -258,9 +257,12 @@ flip7Io.on('connection', (socket) => {
                 flip7Io.to(roomCode).emit('playerReconnected', { id: socket.id, userId, name: userName });
             }
         } else {
+            // 🚨 핵심 수정 4: 방의 상태가 LOBBY가 아니면 이 사람은 확실히 관전자(isSpectator)임을 표시
+            const isSpectator = room.phase !== 'LOBBY';
             room.players.push({ 
                 id: socket.id, userId, name: userName, isBot, 
-                ready: room.players.length === 0, score: 0, connected: true 
+                ready: room.players.length === 0, score: 0, connected: true,
+                isSpectator: isSpectator
             });
         }
         flip7Io.to(roomCode).emit('roomUpdate', room);
@@ -286,7 +288,6 @@ flip7Io.on('connection', (socket) => {
         socket.to(roomCode).emit('provideGameState'); 
     });
 
-    // 🚨 핵심 수정 2: 무한 핑퐁 동기화 버그 방지 (보낸 사람 제외하고 브로드캐스트)
     socket.on('sendGameStateSync', ({ roomCode, gameState }) => {
         socket.broadcast.to(roomCode).emit('updateGameStateSync', gameState);
     });
@@ -301,26 +302,30 @@ flip7Io.on('connection', (socket) => {
             if (player) {
                 player.connected = false;
                 
-                if (room.phase === 'PLAYING' || room.phase === 'GAME') {
+                // 🚨 핵심 수정 4: 관전자(isSpectator === true)가 나갔을 때는 '재접속 대기 타이머' 발동 금지!
+                if ((room.phase === 'PLAYING' || room.phase === 'GAME') && !player.isSpectator) {
                     flip7Io.to(roomCode).emit('playerDisconnected', { id: player.id, userId: player.userId, name: player.name });
                     
                     if (!room.timers) room.timers = {};
                     
-                    // 🚨 핵심 수정 3: 60초 초과 시 방에서 쫓아내고 남은 인원에게 강퇴 이벤트 전송 (클라이언트에서 새로고침 처리됨)
                     room.timers[player.userId] = setTimeout(() => {
                         room.players = room.players.filter(p => p.userId !== player.userId);
                         flip7Io.to(roomCode).emit('playerKicked', { userId: player.userId, name: player.name });
                         flip7Io.to(roomCode).emit('roomUpdate', room);
                         delete room.timers[player.userId];
                         
-                        if (room.players.length === 0) delete flip7Rooms[roomCode];
+                        // 방장이거나 남은 사람이 관전자밖에 없으면 방 폭파
+                        if (room.players.filter(p => !p.isSpectator && !p.isBot).length === 0) {
+                            delete flip7Rooms[roomCode];
+                        }
                     }, 60000); 
                 } else {
+                    // 로비 상태이거나, 나간 사람이 "관전자"인 경우는 타이머 없이 즉시 제거
                     room.players = room.players.filter(p => p.id !== socket.id);
-                    if (room.players.length === 0) {
+                    if (room.players.filter(p => !p.isSpectator && !p.isBot).length === 0) {
                         delete flip7Rooms[roomCode];
                     } else {
-                        room.players[0].ready = true;
+                        if(room.players[0]) room.players[0].ready = true;
                         flip7Io.to(roomCode).emit('roomUpdate', room);
                     }
                 }
@@ -341,8 +346,13 @@ function leaveFlip7Room(socket, roomCode) {
         room.players = room.players.filter(p => p.id !== socket.id);
         socket.leave(roomCode);
         
-        if (room.players.length === 0) delete flip7Rooms[roomCode];
-        else { room.players[0].ready = true; flip7Io.to(roomCode).emit('roomUpdate', room); }
+        // 관전자만 남아있으면 방을 폭파하도록 최적화
+        if (room.players.filter(p => !p.isSpectator && !p.isBot).length === 0) {
+            delete flip7Rooms[roomCode];
+        } else { 
+            if(room.players[0]) room.players[0].ready = true; 
+            flip7Io.to(roomCode).emit('roomUpdate', room); 
+        }
     }
 }
 
