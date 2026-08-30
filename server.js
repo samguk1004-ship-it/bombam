@@ -550,32 +550,64 @@ function leaveFlip7Room(socket, roomCode) {
 const coupIo = io.of('/coup');
 const coupRooms = {};
 
-// 쿠 인원수에 따른 덱 생성 (2~6인: 3장씩 총 15장 / 7~8인: 4장씩 총 20장)
 const createCoupDeck = (playerCount) => {
     const chars = ['공작', '자객', '사령관', '외교관', '귀부인'];
     const copies = playerCount >= 7 ? 4 : 3;
     let deck = [];
-    
     chars.forEach(c => { 
         for(let i=0; i<copies; i++) {
             deck.push(c);
         }
     });
-    return deck.sort(() => Math.random() - 0.5); // 카드 셔플
+    return deck.sort(() => Math.random() - 0.5); 
 };
 
+// 턴 넘기기
+function nextTurnCoup(room) {
+    do {
+        room.turnIndex = (room.turnIndex + 1) % room.players.length;
+    } while (room.players[room.turnIndex].isDead);
+    room.turnId = room.players[room.turnIndex].id;
+}
+
+// 방해 여부를 물어볼 다음 사람 찾기
+function setNextBlocker(room) {
+    const actorIdx = room.players.findIndex(p => p.id === room.actionState.actorId);
+    let nextIdx = (actorIdx + 1) % room.players.length;
+    
+    let found = false;
+    for (let i = 0; i < room.players.length - 1; i++) {
+        const p = room.players[nextIdx];
+        if (!p.isDead && !room.actionState.askedList.includes(p.id)) {
+            room.actionState.currentPromptId = p.id;
+            found = true;
+            break;
+        }
+        nextIdx = (nextIdx + 1) % room.players.length;
+    }
+
+    // 모든 사람이 방해하지 않고 통과했다면
+    if (!found) {
+        const actor = room.players.find(p => p.id === room.actionState.actorId);
+        if (actor) {
+            // 원조 처리 완료
+            if (room.actionState.type === 'FOREIGN_AID') actor.coins += 2;
+        }
+        room.actionState = null;
+        nextTurnCoup(room);
+    }
+}
+
 coupIo.on('connection', (socket) => {
-    // 1. 방 입장
     socket.on('joinRoom', ({ roomCode, userName, userId, isBot }) => {
         try {
             socket.join(roomCode);
             if (!coupRooms[roomCode]) {
-                coupRooms[roomCode] = { roomCode, phase: 'LOBBY', players: [], turnIndex: 0, deck: [] };
+                coupRooms[roomCode] = { roomCode, phase: 'LOBBY', players: [], turnIndex: 0, deck: [], actionState: null };
             }
             const room = coupRooms[roomCode];
             
             let existingPlayer = room.players.find(p => (userId && p.userId === userId) || p.name === userName);
-            
             if (existingPlayer) {
                 existingPlayer.id = socket.id;
                 existingPlayer.connected = true;
@@ -589,7 +621,6 @@ coupIo.on('connection', (socket) => {
         } catch(e) {}
     });
 
-    // 2. 준비 상태 토글
     socket.on('playerReady', ({ roomCode, ready }) => {
         try {
             const room = coupRooms[roomCode];
@@ -600,18 +631,15 @@ coupIo.on('connection', (socket) => {
         } catch(e) {}
     });
 
-    // 3. 게임 시작 [수정: 랜덤 턴 부여 및 인원수에 따른 덱 배분]
     socket.on('startGame', (roomCode) => {
         try {
             const room = coupRooms[roomCode];
             if (!room || room.players.length === 0) return;
             
             room.phase = 'GAME';
-            
-            // 인원수에 맞춰 덱 생성 호출 (3장씩 or 4장씩)
+            room.actionState = null;
             room.deck = createCoupDeck(room.players.length);
             
-            // 플레이어 초기화 (코인 2개, 카드 2장씩 배분)
             room.players.forEach(p => {
                 p.coins = 2;
                 p.isDead = false;
@@ -621,16 +649,15 @@ coupIo.on('connection', (socket) => {
                 ];
             });
             
-            // [랜덤 시작 적용] 방장(0번 인덱스) 우선이 아닌 무작위 인덱스 추첨
             room.turnIndex = Math.floor(Math.random() * room.players.length);
             room.turnId = room.players[room.turnIndex].id;
             
             coupIo.to(roomCode).emit('gameStarted', room);
-            coupIo.to(roomCode).emit('roomUpdate', room); // 턴 업데이트 동기화
+            coupIo.to(roomCode).emit('roomUpdate', room); 
         } catch(e) {}
     });
 
-    // 4. 액션 처리 
+    // 4. 최초 액션 제출
     socket.on('submitAction', ({ roomCode, action, targetId }) => {
         try {
             const room = coupRooms[roomCode];
@@ -639,30 +666,32 @@ coupIo.on('connection', (socket) => {
             const actor = room.players.find(p => p.id === socket.id);
             const target = room.players.find(p => p.id === targetId);
 
-            if (socket.id !== room.turnId || actor.isDead) return;
+            if (socket.id !== room.turnId || actor.isDead || room.actionState) return;
 
-            // 액션별 로직
-            if (action === 'INCOME') {
-                actor.coins += 1;
-            } else if (action === 'FOREIGN_AID') {
-                actor.coins += 2;
-            } else if (action === 'DUKE') {
-                actor.coins += 3;
-            } else if (action === 'COUP' && target) {
-                actor.coins -= 7;
-                killCoupInfluence(target);
-            } else if (action === 'ASSASSIN' && target) {
-                actor.coins -= 3;
-                killCoupInfluence(target);
-            } else if (action === 'CAPTAIN' && target) {
+            if (action === 'FOREIGN_AID') {
+                // 원조 시 즉시 획득하지 않고 방해 팝업 진입
+                room.actionState = {
+                    type: 'FOREIGN_AID',
+                    actorId: actor.id,
+                    askedList: [],
+                    phase: 'WAIT_BLOCK'
+                };
+                setNextBlocker(room);
+                coupIo.to(roomCode).emit('roomUpdate', room);
+                return;
+            }
+
+            // 나머지 액션들 (현재는 즉시 처리 - 추후 확장을 위해 동일한 구조로 변경 가능)
+            if (action === 'INCOME') actor.coins += 1;
+            else if (action === 'DUKE') actor.coins += 3;
+            else if (action === 'COUP' && target) { actor.coins -= 7; killCoupInfluence(target); }
+            else if (action === 'ASSASSIN' && target) { actor.coins -= 3; killCoupInfluence(target); }
+            else if (action === 'CAPTAIN' && target) {
                 const stealAmount = Math.min(2, target.coins);
                 target.coins -= stealAmount;
                 actor.coins += stealAmount;
             } else if (action === 'AMBASSADOR') {
-                // 외교관: 간소화된 로직 적용 (살아있는 카드를 다시 덱에 넣고 섞은 후 재뽑기)
-                actor.influence.forEach(c => {
-                    if (c.alive) room.deck.push(c.role);
-                });
+                actor.influence.forEach(c => { if (c.alive) room.deck.push(c.role); });
                 room.deck.sort(() => Math.random() - 0.5);
                 actor.influence = actor.influence.map(c => {
                     if (c.alive) return { role: room.deck.pop(), alive: true };
@@ -670,21 +699,91 @@ coupIo.on('connection', (socket) => {
                 });
             }
 
-            // 승리 조건 체크 및 턴 넘기기
             const alivePlayers = room.players.filter(p => !p.isDead);
             if (alivePlayers.length === 1) {
-                room.phase = 'GAME_OVER';
-                room.winner = alivePlayers[0].name;
+                room.phase = 'GAME_OVER'; room.winner = alivePlayers[0].name;
             } else {
-                // [수정: 시계 방향 턴 진행] 배열의 끝에 도달하면 처음(0)으로 돌아감
-                do {
-                    room.turnIndex = (room.turnIndex + 1) % room.players.length;
-                } while (room.players[room.turnIndex].isDead);
-                room.turnId = room.players[room.turnIndex].id;
+                nextTurnCoup(room);
             }
-
             coupIo.to(roomCode).emit('roomUpdate', room);
         } catch(e) {}
+    });
+
+    // 방해할거야? 에 대한 응답
+    socket.on('blockResponse', ({ roomCode, block }) => {
+        try {
+            const room = coupRooms[roomCode];
+            if (!room || !room.actionState || room.actionState.currentPromptId !== socket.id) return;
+            
+            if (block) { // "예" 선택 (방해함)
+                room.actionState.blockerId = socket.id;
+                room.actionState.phase = 'WAIT_CHALLENGE';
+            } else { // "아니오" 선택 (넘어감)
+                room.actionState.askedList.push(socket.id);
+                coupIo.to(roomCode).emit('showOkEmote', socket.id); // OK 애니메이션 발생
+                setNextBlocker(room);
+            }
+            coupIo.to(roomCode).emit('roomUpdate', room);
+        } catch(e){}
+    });
+
+    // 쟤가 방해했는데 카드 확인할거야? 에 대한 응답
+    socket.on('challengeResponse', ({ roomCode, challenge }) => {
+        try {
+            const room = coupRooms[roomCode];
+            if (!room || !room.actionState || room.actionState.actorId !== socket.id) return;
+
+            if (challenge) { // "예" 선택 (확인함)
+                const blocker = room.players.find(p => p.id === room.actionState.blockerId);
+                const actor = room.players.find(p => p.id === room.actionState.actorId);
+                
+                // 공작(Duke)이 진짜 있는지 확인
+                const hasDuke = blocker.influence.some(c => c.alive && c.role === '공작');
+
+                if (hasDuke) {
+                    // 방해 성공! 원조 사용자가 카드를 잃음
+                    room.actionState.phase = 'LOSE_CARD';
+                    room.actionState.loserId = actor.id;
+                } else {
+                    // 거짓말! 방해한 놈이 카드를 잃고, 원조는 성공함
+                    actor.coins += 2;
+                    room.actionState.phase = 'LOSE_CARD';
+                    room.actionState.loserId = blocker.id;
+                }
+            } else {
+                // "아니오" 선택 (방해 인정). 원조 실패 후 턴 넘어감
+                room.actionState = null;
+                nextTurnCoup(room);
+            }
+            coupIo.to(roomCode).emit('roomUpdate', room);
+        } catch(e){}
+    });
+
+    // 카드 버리기 (다이) 처리
+    socket.on('selectLoseCard', ({ roomCode, cardIndex }) => {
+        try {
+            const room = coupRooms[roomCode];
+            if (!room || !room.actionState || room.actionState.loserId !== socket.id) return;
+
+            const loser = room.players.find(p => p.id === socket.id);
+            if (loser && loser.influence[cardIndex] && loser.influence[cardIndex].alive) {
+                loser.influence[cardIndex].alive = false; // 카드 파괴
+                
+                // 패를 다 잃었으면 사망 처리
+                if (!loser.influence.some(c => c.alive)) loser.isDead = true;
+
+                // 게임 종료 체크
+                const alivePlayers = room.players.filter(p => !p.isDead);
+                if (alivePlayers.length <= 1) {
+                    room.phase = 'GAME_OVER';
+                    room.winner = alivePlayers[0]?.name || '생존자 없음';
+                } else {
+                    room.actionState = null;
+                    nextTurnCoup(room);
+                }
+                coupIo.to(roomCode).emit('roomUpdate', room);
+            }
+        } catch(e){}
     });
 
     socket.on('leaveRoom', (roomCode) => leaveCoupRoom(socket, roomCode));
@@ -715,10 +814,7 @@ function leaveCoupRoom(socket, specificRoomCode) {
                     room.phase = 'GAME_OVER';
                     room.winner = room.players.find(p => !p.isDead)?.name || '생존자 없음';
                 } else if (room.phase === 'GAME' && room.turnId === socket.id) {
-                    do {
-                        room.turnIndex = (room.turnIndex + 1) % room.players.length;
-                    } while (room.players[room.turnIndex].isDead);
-                    room.turnId = room.players[room.turnIndex].id;
+                    nextTurnCoup(room);
                 } else if (room.phase === 'LOBBY' && room.players[0]) {
                     room.players[0].ready = true;
                 }
@@ -727,7 +823,6 @@ function leaveCoupRoom(socket, specificRoomCode) {
         }
     });
 }
-
 
 const PORT = process.env.PORT || 10000;
 server.listen(PORT, () => { 
