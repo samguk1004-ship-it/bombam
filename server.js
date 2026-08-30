@@ -578,7 +578,6 @@ function setNextBlocker(room, roomCode) {
     for (let i = 0; i < room.players.length - 1; i++) {
         const p = room.players[nextIdx];
         if (!p.isDead && !room.actionState.askedList.includes(p.id)) {
-            // 암살의 경우 대상자(targetId)에게만 경호 질문이 가야 하므로 체크
             if (room.actionState.type === 'ASSASSIN') {
                 if (p.id === room.actionState.targetId) {
                     room.actionState.currentPromptId = p.id;
@@ -605,7 +604,6 @@ function setNextBlocker(room, roomCode) {
             } else if (room.actionState.type === 'DUKE') {
                 actor.coins += 3;
             } else if (room.actionState.type === 'ASSASSIN') {
-                // [시나리오 1] 아니오 선택시 (혹은 응답 안 해서 타임아웃/패스시) 암살 성공 -> 대상자 버릴패 선택 후 사망
                 coupIo.to(roomCode).emit('actionAnnounce', { actorName: actor.name, actionText: '암살에 성공했습니다.' });
                 if (target && !target.isDead) {
                     room.actionState.phase = 'REVEAL_CARD';
@@ -624,7 +622,7 @@ function setNextBlocker(room, roomCode) {
 function processBlockResponse(room, roomCode, playerId, block) {
     clearCoupTimer(room);
     const actor = room.players.find(p => p.id === room.actionState.actorId);
-    
+
     if (block) { 
         room.actionState.blockerId = playerId;
         room.actionState.phase = 'WAIT_CHALLENGE';
@@ -635,7 +633,6 @@ function processBlockResponse(room, roomCode, playerId, block) {
         coupIo.to(roomCode).emit('showOkEmote', playerId); 
 
         if (room.actionState.type === 'ASSASSIN') {
-            // [시나리오 1] 아니오 선택 시 바로 암살 성공 처리
             clearCoupTimer(room);
             coupIo.to(roomCode).emit('actionAnnounce', { actorName: actor ? actor.name : '', actionText: '암살에 성공했습니다.' });
             const target = room.players.find(p => p.id === room.actionState.targetId);
@@ -669,14 +666,12 @@ function processChallengeResponse(room, roomCode, playerId, challenge) {
             }
         });
     } else {
-        const actor = room.players.find(p => p.id => playerId);
+        const actor = room.players.find(p => p.id === playerId);
         const blocker = room.players.find(p => p.id === room.actionState.blockerId);
-        
-        if (room.actionState.type === 'ASSASSIN') {
-            // [시나리오 2] 예 선택 + 챌린지 안 함 -> 귀부인 방어 성공
+
+        if (room.actionState.type === 'ASSASSIN_BLOCK_CHALLENGE') {
             coupIo.to(roomCode).emit('actionAnnounce', { actorName: blocker ? blocker.name : '', actionText: '암살에 실패했습니다.' });
             
-            // 암살자에게 버릴 패 선택 후 사망 부여
             room.actionState.phase = 'REVEAL_CARD';
             room.actionState.revealerId = room.actionState.actorId;
             room.actionState.type = 'ASSASSIN_ATTACKER_DEATH';
@@ -705,7 +700,6 @@ function processRevealCard(room, roomCode, revealerId, cardIndex) {
     const actionType = room.actionState ? room.actionState.type : '';
     const isCoup = actionType === 'COUP' || actionType === 'ASSASSIN_DEATH' || actionType === 'ASSASSIN_ATTACKER_DEATH';
     
-    // [시나리오 3] 경호하기(예) 선택 후 카드 뒤집었을 때 귀부인이 아니면 블러핑 실패 (그 카드 사망 + 다음 카드도 사망 + 암살 성공)
     let isSuccess = false;
     if (actionType === 'ASSASSIN_BLOCK_CHALLENGE') {
         isSuccess = (card.role === '귀부인');
@@ -738,16 +732,14 @@ function processRevealCard(room, roomCode, revealerId, cardIndex) {
             const actor = currentRoom.players.find(p => p.id === currentRoom.actionState.actorId);
 
             if (isSuccess) {
-                // 귀부인 맞음: 덱으로 돌아가고 교환 모션 후 암살 실패 처리
                 currentRoom.deck.push('귀부인');
                 currentRoom.deck.sort(() => Math.random() - 0.5);
                 currentCard.role = currentRoom.deck.pop();
                 
                 coupIo.to(roomCode).emit('actionAnnounce', { actorName: blocker ? blocker.name : '', actionText: '암살에 실패했습니다.' });
             } else {
-                // [시나리오 3] 귀부인이 아님 (블러핑 실패): 첫 번째 카드 사망 + 남은 살아있는 다음 카드도 바로 사망 + 암살 성공
                 currentCard.alive = false;
-                currentRevealer.influence.forEach(c => { c.alive = false; }); // 모든 카드 사망 처리 (동반 사망/다음 카드 사망)
+                currentRevealer.influence.forEach(c => { c.alive = false; }); 
                 currentRevealer.isDead = true;
 
                 coupIo.to(roomCode).emit('actionAnnounce', { actorName: actor ? actor.name : '', actionText: '암살에 성공했습니다.' });
@@ -1006,14 +998,12 @@ coupIo.on('connection', (socket) => {
             if (room.actionState.type === 'ASSASSIN') {
                 clearCoupTimer(room);
                 if (block) {
-                    // 경호하기(예) 선택 시 챌린지 대기 단계로 전환
                     room.actionState.blockerId = socket.id;
                     room.actionState.phase = 'WAIT_CHALLENGE';
                     room.actionState.type = 'ASSASSIN_BLOCK_CHALLENGE';
                     startCoupTimer(room, roomCode, 30, () => processChallengeResponse(room, roomCode, room.actionState.actorId, false));
                     emitCoupUpdate(roomCode, room);
                 } else {
-                    // 아니오 선택 시 암살 성공 -> 버릴 패 선택 후 사망
                     const actor = room.players.find(p => p.id === room.actionState.actorId);
                     coupIo.to(roomCode).emit('actionAnnounce', { actorName: actor ? actor.name : '', actionText: '암살에 성공했습니다.' });
                     room.actionState.phase = 'REVEAL_CARD';
@@ -1036,7 +1026,6 @@ coupIo.on('connection', (socket) => {
             if (room.actionState.type === 'ASSASSIN_BLOCK_CHALLENGE') {
                 clearCoupTimer(room);
                 if (challenge) {
-                    // 챌린지(예) 선택 시 경호한 사람의 카드 리빌 단계로 진입
                     room.actionState.phase = 'REVEAL_CARD';
                     room.actionState.revealerId = room.actionState.blockerId;
                     startCoupTimer(room, roomCode, 30, () => {
@@ -1050,7 +1039,6 @@ coupIo.on('connection', (socket) => {
                     });
                     emitCoupUpdate(roomCode, room);
                 } else {
-                    // 챌린지 안 함(아니오) -> 경호 성공 (암살 실패, 암살자 버릴 패 선택 후 사망)
                     const blocker = room.players.find(p => p.id === room.actionState.blockerId);
                     const actor = room.players.find(p => p.id === room.actionState.actorId);
                     coupIo.to(roomCode).emit('actionAnnounce', { actorName: blocker ? blocker.name : '', actionText: '암살에 실패했습니다.' });
