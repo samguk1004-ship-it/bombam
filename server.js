@@ -482,15 +482,14 @@ function processRevealCard(room, roomCode, revealerId, cardIndex) {
                     return;
                 }
             } else {
-                // 🛑 1단계: 첫 번째 카드 사망 처리 및 안착 유도를 위한 중간 패킷 송신
+                // 🛑 1단계: 첫 번째 카드 사망 처리 후 즉시 상태 동기화 전송 (통통 튀는 버그 방지)
                 currentCard.alive = false;
                 
                 coupIo.to(roomCode).emit('actionAnnounce', { actorName: curActorName, actionText: '경호 실패! 첫 번째 카드가 뒤집혀 다이합니다.' });
                 
-                // 첫 번째 카드가 완전히 안착(정지)할 수 있도록 상태를 먼저 동기화
                 emitCoupUpdate(currentRoom, currentRoom);
 
-                // 🛑 2단계: 첫 번째 카드가 안착한 뒤 충분한 시간(1.5초)을 두고 두 번째 카드 오픈 연출 시작
+                // 🛑 2단계: 1.5초 대기 후 두 번째 카드 뒤집기 연출 시작
                 setTimeout(() => {
                     const latestRoom = coupRooms[roomCode];
                     if (!latestRoom) return;
@@ -502,7 +501,6 @@ function processRevealCard(room, roomCode, revealerId, cardIndex) {
                         const secondCard = latestRevealer.influence[secondCardIdx];
                         secondCard.alive = false;
 
-                        // 두 번째 카드 뒤집기 애니메이션 트리거
                         coupIo.to(roomCode).emit('blockRevealAnimation', {
                             revealerId: latestRevealer.id,
                             cardIndex: secondCardIdx,
@@ -512,7 +510,7 @@ function processRevealCard(room, roomCode, revealerId, cardIndex) {
 
                         coupIo.to(roomCode).emit('actionAnnounce', { actorName: curActorName, actionText: '나머지 두 번째 카드마저 뒤집히며 최종 사망(다이)합니다.' });
 
-                        // 🛑 3단계: 두 번째 카드 애니메이션이 끝난 후 최종 사망 확정 및 다음 턴 진행
+                        // 🛑 3단계: 두 번째 카드 안착 후 최종 사망 확정 및 다음 턴 진행
                         setTimeout(() => {
                             const finalRoom = coupRooms[roomCode];
                             if (!finalRoom) return;
@@ -530,7 +528,7 @@ function processRevealCard(room, roomCode, revealerId, cardIndex) {
                             } else {
                                 finalRoom.actionState = null;
                                 nextTurnCoup(finalRoom, roomCode);
-                                emitCoupUpdate(finalRoom, finalRoom);
+                                emitCoupUpdate(roomCode, finalRoom);
                             }
                         }, 3000);
                     }
