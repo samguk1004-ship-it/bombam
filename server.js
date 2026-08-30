@@ -98,6 +98,7 @@ flip7Io.on('connection', (socket) => {
 // ==========================================
 const coupIo = io.of('/coup');
 const coupRooms = {};
+const disconnectTimers = {}; // 1분 유예 타이머 관리
 
 function emitCoupUpdate(roomCode, room) {
     const safeRoom = {
@@ -152,7 +153,6 @@ function nextTurnCoup(room, roomCode) {
     } while (room.players[room.turnIndex].isDead);
     room.turnId = room.players[room.turnIndex].id;
 
-    // ★ 턴이 넘어갈 때 확실하게 60초 타이머 구동 및 전송
     startCoupTimer(room, roomCode, 60, () => {
         const currentRoom = coupRooms[roomCode];
         if (!currentRoom || currentRoom.phase !== 'GAME') return;
@@ -427,6 +427,14 @@ coupIo.on('connection', (socket) => {
                 coupRooms[roomCode] = { roomCode, phase: 'LOBBY', players: [], spectators: [], turnIndex: 0, deck: [], actionState: null, timer: null };
             }
             const room = coupRooms[roomCode];
+
+            // 1분 유예 타이머 취소 (재접속 성공)
+            const disconnectKey = `${roomCode}_${userId}`;
+            if (disconnectTimers[disconnectKey]) {
+                clearTimeout(disconnectTimers[disconnectKey]);
+                delete disconnectTimers[disconnectKey];
+            }
+
             let existingPlayer = room.players.find(p => (userId && p.userId === userId) || p.name === userName);
             
             if (!existingPlayer) {
@@ -604,7 +612,51 @@ coupIo.on('connection', (socket) => {
         } catch(e){}
     });
 
-    socket.on('disconnect', () => {});
+    socket.on('leaveRoom', (roomCode) => {
+        try {
+            const room = coupRooms[roomCode];
+            if (!room) return;
+            room.players = room.players.filter(p => p.id !== socket.id);
+            socket.leave(roomCode);
+            if (room.players.length === 0) {
+                clearCoupTimer(room);
+                delete coupRooms[roomCode];
+            } else {
+                emitCoupUpdate(roomCode, room);
+            }
+        } catch(e){}
+    });
+
+    socket.on('disconnect', () => {
+        try {
+            for (let roomCode in coupRooms) {
+                const room = coupRooms[roomCode];
+                const player = room.players.find(p => p.id === socket.id);
+                if (player) {
+                    player.connected = false;
+                    const disconnectKey = `${roomCode}_${player.userId}`;
+                    
+                    // 게임 중이거나 로비일 때 1분(60초) 동안 재접속을 유예
+                    if (disconnectTimers[disconnectKey]) clearTimeout(disconnectTimers[disconnectKey]);
+                    
+                    disconnectTimers[disconnectKey] = setTimeout(() => {
+                        delete disconnectTimers[disconnectKey];
+                        const currentRoom = coupRooms[roomCode];
+                        if (!currentRoom) return;
+                        
+                        // 1분이 지나도 안 돌아오면 방에서 완전 퇴장 처리
+                        currentRoom.players = currentRoom.players.filter(p => p.userId !== player.userId);
+                        if (currentRoom.players.length === 0) {
+                            clearCoupTimer(currentRoom);
+                            delete coupRooms[roomCode];
+                        } else {
+                            emitCoupUpdate(roomCode, currentRoom);
+                        }
+                    }, 60000); // 1분 유예
+                }
+            }
+        } catch(e) {}
+    });
 });
 
 const PORT = process.env.PORT || 10000;
