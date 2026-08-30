@@ -743,7 +743,7 @@ function processRevealCard(room, roomCode, revealerId, cardIndex) {
                 return;
             } else {
                 currentRoom.actionState = null;
-                nextTurnCoup(currentRoom, roomCode);
+                nextTurnCoup(room, roomCode);
                 emitCoupUpdate(roomCode, currentRoom);
                 return;
             }
@@ -767,14 +767,10 @@ function processRevealCard(room, roomCode, revealerId, cardIndex) {
                 }, 2000);
                 return;
             } else {
-                // 첫 번째 카드 사망 처리
                 currentCard.alive = false;
-
-                // 남은 살아있는 다른 카드 찾기
                 const otherAliveCard = currentRevealer.influence.find(c => c !== currentCard && c.alive);
 
                 if (otherAliveCard) {
-                    // 두 번째 남은 카드도 애니메이션으로 오픈하며 죽이는 연출 전송
                     const otherCardIndex = currentRevealer.influence.indexOf(otherAliveCard);
                     coupIo.to(roomCode).emit('blockRevealAnimation', {
                         revealerId: currentRevealer.id,
@@ -843,7 +839,7 @@ function processRevealCard(room, roomCode, revealerId, cardIndex) {
             emitCoupUpdate(roomCode, currentRoom);
         } else {
             currentRoom.actionState = null;
-            nextTurnCoup(room, roomCode);
+            nextTurnCoup(currentRoom, roomCode);
             emitCoupUpdate(roomCode, currentRoom);
         }
     }, 3000);
