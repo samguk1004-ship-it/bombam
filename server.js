@@ -593,7 +593,6 @@ function killCoupInfluence(target) {
     if (!target.influence.some(c => c.alive)) target.isDead = true;
 }
 
-// 턴 넘기기
 function nextTurnCoup(room, roomCode) {
     clearCoupTimer(room);
     
@@ -627,7 +626,6 @@ function nextTurnCoup(room, roomCode) {
     });
 }
 
-// 다음 방해 여부 묻기 (원조 및 징세 공용)
 function setNextBlocker(room, roomCode) {
     const actorIdx = room.players.findIndex(p => p.id === room.actionState.actorId);
     let nextIdx = (actorIdx + 1) % room.players.length;
@@ -679,7 +677,6 @@ function processChallengeResponse(room, roomCode, playerId, challenge) {
     clearCoupTimer(room);
     if (challenge) { 
         room.actionState.phase = 'REVEAL_CARD';
-        // 징세(DUKE)인 경우 액션 당사자(Actor)가 증명, 원조(FOREIGN_AID)인 경우 방해자(Blocker)가 증명
         room.actionState.revealerId = (room.actionState.type === 'DUKE') ? room.actionState.actorId : room.actionState.blockerId;
         
         startCoupTimer(room, roomCode, 30, () => {
@@ -694,7 +691,7 @@ function processChallengeResponse(room, roomCode, playerId, challenge) {
         coupIo.to(roomCode).emit('actionAnnounce', { actorName: actor.name, actionText: room.actionState.type === 'DUKE' ? '징세를 실패했습니다.' : '원조에 실패했습니다.' });
         
         if (room.actionState.type === 'DUKE') {
-            killCoupInfluence(actor); // 징세 시 증명 거부하면 카드 잃음 (거짓말 페널티)
+            killCoupInfluence(actor); 
         }
         
         room.actionState = null;
@@ -727,7 +724,7 @@ function processRevealCard(room, roomCode, revealerId, cardIndex) {
                 revealer.influence[cardIndex].role = room.deck.pop();
                 
                 revealer.coins += 3;
-                if (blocker) killCoupInfluence(blocker); // 방해자 카드 죽음
+                if (blocker) killCoupInfluence(blocker); 
             } else {
                 revealer.influence[cardIndex].alive = false;
                 if (!revealer.influence.some(c => c.alive)) revealer.isDead = true;
@@ -765,19 +762,49 @@ coupIo.on('connection', (socket) => {
         try {
             socket.join(roomCode);
             if (!coupRooms[roomCode]) {
-                coupRooms[roomCode] = { roomCode, phase: 'LOBBY', players: [], turnIndex: 0, deck: [], actionState: null, timer: null };
+                coupRooms[roomCode] = { roomCode, phase: 'LOBBY', players: [], spectators: [], turnIndex: 0, deck: [], actionState: null, timer: null };
             }
             const room = coupRooms[roomCode];
             
             let existingPlayer = room.players.find(p => (userId && p.userId === userId) || p.name === userName);
-            if (existingPlayer) {
-                existingPlayer.id = socket.id;
-                existingPlayer.connected = true;
+            
+            // ★ 게임 중 난입 또는 재접속 시 로직
+            if (room.phase !== 'LOBBY' && room.phase !== 'GAME_OVER') {
+                if (existingPlayer) {
+                    // ★ 버그 해결: 재접속 시 이전 소켓 ID를 현재 소켓 ID로 완벽히 교체
+                    const oldId = existingPlayer.id;
+                    existingPlayer.id = socket.id;
+                    existingPlayer.connected = true;
+                    
+                    if (room.turnId === oldId) room.turnId = socket.id;
+                    
+                    if (room.actionState) {
+                        if (room.actionState.actorId === oldId) room.actionState.actorId = socket.id;
+                        if (room.actionState.currentPromptId === oldId) room.actionState.currentPromptId = socket.id;
+                        if (room.actionState.blockerId === oldId) room.actionState.blockerId = socket.id;
+                        if (room.actionState.revealerId === oldId) room.actionState.revealerId = socket.id;
+                        if (room.actionState.askedList) {
+                            room.actionState.askedList = room.actionState.askedList.map(id => id === oldId ? socket.id : id);
+                        }
+                    }
+                } else {
+                    // ★ 새로운 플레이어 난입 시 관전자 모드로 추가
+                    if (!room.spectators) room.spectators = [];
+                    if (!room.spectators.find(s => s.userId === userId)) {
+                        room.spectators.push({ id: socket.id, userId, name: userName });
+                    }
+                }
             } else {
-                room.players.push({
-                    id: socket.id, name: userName, userId, isBot, ready: room.players.length === 0,
-                    coins: 2, influence: [], isDead: false, connected: true
-                });
+                // 대기실 접속
+                if (existingPlayer) {
+                    existingPlayer.id = socket.id;
+                    existingPlayer.connected = true;
+                } else {
+                    room.players.push({
+                        id: socket.id, name: userName, userId, isBot, ready: room.players.length === 0,
+                        coins: 2, influence: [], isDead: false, connected: true
+                    });
+                }
             }
             emitCoupUpdate(roomCode, room);
         } catch(e) {}
@@ -803,6 +830,7 @@ coupIo.on('connection', (socket) => {
             
             room.phase = 'GAME';
             room.actionState = null;
+            room.spectators = []; // 게임 시작 시 관전자 초기화
             room.deck = createCoupDeck(room.players.length);
             
             room.players.forEach(p => {
@@ -929,22 +957,33 @@ function leaveCoupRoom(socket, specificRoomCode) {
     checkRooms.forEach(roomCode => {
         const room = coupRooms[roomCode];
         if (room) {
-            room.players = room.players.filter(p => p.id !== socket.id);
-            if (specificRoomCode) socket.leave(roomCode);
+            // 관전자 삭제
+            if (room.spectators) {
+                room.spectators = room.spectators.filter(s => s.id !== socket.id);
+            }
             
-            if (room.players.filter(p => !p.isBot).length === 0) {
-                clearCoupTimer(room);
-                delete coupRooms[roomCode];
-            } else {
-                if (room.phase === 'GAME' && room.players.filter(p => !p.isDead).length < 2) {
+            const wasPlayer = room.players.some(p => p.id === socket.id);
+            if (wasPlayer) {
+                room.players = room.players.filter(p => p.id !== socket.id);
+                if (specificRoomCode) socket.leave(roomCode);
+                
+                if (room.players.filter(p => !p.isBot).length === 0) {
                     clearCoupTimer(room);
-                    room.phase = 'GAME_OVER';
-                    room.winner = room.players.find(p => !p.isDead)?.name || '생존자 없음';
-                } else if (room.phase === 'GAME' && room.turnId === socket.id) {
-                    nextTurnCoup(room, roomCode);
-                } else if (room.phase === 'LOBBY' && room.players[0]) {
-                    room.players[0].ready = true;
+                    delete coupRooms[roomCode];
+                } else {
+                    if (room.phase === 'GAME' && room.players.filter(p => !p.isDead).length < 2) {
+                        clearCoupTimer(room);
+                        room.phase = 'GAME_OVER';
+                        room.winner = room.players.find(p => !p.isDead)?.name || '생존자 없음';
+                    } else if (room.phase === 'GAME' && room.turnId === socket.id) {
+                        nextTurnCoup(room, roomCode);
+                    } else if (room.phase === 'LOBBY' && room.players[0]) {
+                        room.players[0].ready = true;
+                    }
+                    emitCoupUpdate(roomCode, room);
                 }
+            } else {
+                if (specificRoomCode) socket.leave(roomCode);
                 emitCoupUpdate(roomCode, room);
             }
         }
