@@ -15,7 +15,7 @@ app.get('/', (req, res) => {
     res.send(`
         <div style="font-family: sans-serif; text-align: center; margin-top: 20%;">
             <h1 style="color: #4ade80;">✅ 게임 서버 정상 작동 중!</h1>
-            <p>포커와 플립7 모두 접속 가능한 상태입니다.</p>
+            <p>포커, 플립7, 쿠(COUP) 모두 접속 가능한 상태입니다.</p>
         </div>
     `);
 });
@@ -86,7 +86,6 @@ pokerIo.on('connection', (socket) => {
             if (!pokerRooms[roomCode]) pokerRooms[roomCode] = { roomCode, phase: 'LOBBY', players: [], spectators: [], timers: {}, paused: false };
             const room = pokerRooms[roomCode];
             
-            // 💡 [수정됨] userId가 undefined일 때 봇들끼리 덮어씌워지는 현상 방지
             let existingPlayer = room.players.find(p => (userId && p.userId === userId) || (userName && p.name === userName));
             
             if (room.phase !== 'LOBBY' && room.phase !== 'GAME_OVER') {
@@ -416,6 +415,7 @@ function leavePokerRoom(socket, roomCode) {
     } catch(e) {}
 }
 
+
 // ==========================================
 // 🎯 [2] 플립 7 전용 (Namespace: /flip7)
 // ==========================================
@@ -543,5 +543,181 @@ function leaveFlip7Room(socket, roomCode) {
     } catch(e) {}
 }
 
+
+// ==========================================
+// 🗡️ [3] 쿠 전용 (Namespace: /coup)
+// ==========================================
+const coupIo = io.of('/coup');
+const coupRooms = {};
+
+// 쿠 기본 덱 생성 (각 3장씩 총 15장)
+const createCoupDeck = () => {
+    const chars = ['공작', '암살자', '사령관', '외교관', '귀부인'];
+    let deck = [];
+    chars.forEach(c => { deck.push(c, c, c); });
+    return deck.sort(() => Math.random() - 0.5); // 카드 셔플
+};
+
+coupIo.on('connection', (socket) => {
+    // 1. 방 입장
+    socket.on('joinRoom', ({ roomCode, userName, userId, isBot }) => {
+        try {
+            socket.join(roomCode);
+            if (!coupRooms[roomCode]) {
+                coupRooms[roomCode] = { roomCode, phase: 'LOBBY', players: [], turnIndex: 0, deck: [] };
+            }
+            const room = coupRooms[roomCode];
+            
+            let existingPlayer = room.players.find(p => (userId && p.userId === userId) || p.name === userName);
+            
+            if (existingPlayer) {
+                existingPlayer.id = socket.id;
+                existingPlayer.connected = true;
+            } else {
+                room.players.push({
+                    id: socket.id, name: userName, userId, isBot, ready: room.players.length === 0,
+                    coins: 2, influence: [], isDead: false, connected: true
+                });
+            }
+            coupIo.to(roomCode).emit('roomUpdate', room);
+        } catch(e) {}
+    });
+
+    // 2. 준비 상태 토글
+    socket.on('playerReady', ({ roomCode, ready }) => {
+        try {
+            const room = coupRooms[roomCode];
+            if (room) {
+                const player = room.players.find(p => p.id === socket.id);
+                if (player) { player.ready = ready; coupIo.to(roomCode).emit('roomUpdate', room); }
+            }
+        } catch(e) {}
+    });
+
+    // 3. 게임 시작
+    socket.on('startGame', (roomCode) => {
+        try {
+            const room = coupRooms[roomCode];
+            if (!room || room.players.length === 0) return;
+            
+            room.phase = 'GAME';
+            room.deck = createCoupDeck();
+            room.turnIndex = 0;
+            
+            // 플레이어 초기화 (코인 2개, 카드 2장씩 배분)
+            room.players.forEach(p => {
+                p.coins = 2;
+                p.isDead = false;
+                p.influence = [
+                    { role: room.deck.pop(), alive: true },
+                    { role: room.deck.pop(), alive: true }
+                ];
+            });
+            
+            room.turnId = room.players[room.turnIndex].id;
+            coupIo.to(roomCode).emit('gameStarted', room);
+        } catch(e) {}
+    });
+
+    // 4. 액션 처리 
+    socket.on('submitAction', ({ roomCode, action, targetId }) => {
+        try {
+            const room = coupRooms[roomCode];
+            if (!room) return;
+
+            const actor = room.players.find(p => p.id === socket.id);
+            const target = room.players.find(p => p.id === targetId);
+
+            if (socket.id !== room.turnId || actor.isDead) return;
+
+            // 액션별 로직
+            if (action === 'INCOME') {
+                actor.coins += 1;
+            } else if (action === 'FOREIGN_AID') {
+                actor.coins += 2;
+            } else if (action === 'DUKE') {
+                actor.coins += 3;
+            } else if (action === 'COUP' && target) {
+                actor.coins -= 7;
+                killCoupInfluence(target);
+            } else if (action === 'ASSASSIN' && target) {
+                actor.coins -= 3;
+                killCoupInfluence(target);
+            } else if (action === 'CAPTAIN' && target) {
+                const stealAmount = Math.min(2, target.coins);
+                target.coins -= stealAmount;
+                actor.coins += stealAmount;
+            } else if (action === 'AMBASSADOR') {
+                // 외교관: 간소화된 로직 적용 (살아있는 카드를 다시 덱에 넣고 섞은 후 재뽑기)
+                actor.influence.forEach(c => {
+                    if (c.alive) room.deck.push(c.role);
+                });
+                room.deck.sort(() => Math.random() - 0.5);
+                actor.influence = actor.influence.map(c => {
+                    if (c.alive) return { role: room.deck.pop(), alive: true };
+                    return c;
+                });
+            }
+
+            // 승리 조건 체크 및 턴 넘기기
+            const alivePlayers = room.players.filter(p => !p.isDead);
+            if (alivePlayers.length === 1) {
+                room.phase = 'GAME_OVER';
+                room.winner = alivePlayers[0].name;
+            } else {
+                do {
+                    room.turnIndex = (room.turnIndex + 1) % room.players.length;
+                } while (room.players[room.turnIndex].isDead);
+                room.turnId = room.players[room.turnIndex].id;
+            }
+
+            coupIo.to(roomCode).emit('roomUpdate', room);
+        } catch(e) {}
+    });
+
+    socket.on('leaveRoom', (roomCode) => leaveCoupRoom(socket, roomCode));
+    
+    socket.on('disconnect', () => {
+        try { leaveCoupRoom(socket, null); } catch(e) {}
+    });
+});
+
+function killCoupInfluence(target) {
+    const aliveCard = target.influence.find(c => c.alive);
+    if (aliveCard) aliveCard.alive = false;
+    if (!target.influence.some(c => c.alive)) target.isDead = true;
+}
+
+function leaveCoupRoom(socket, specificRoomCode) {
+    const checkRooms = specificRoomCode ? [specificRoomCode] : Object.keys(coupRooms);
+    checkRooms.forEach(roomCode => {
+        const room = coupRooms[roomCode];
+        if (room) {
+            room.players = room.players.filter(p => p.id !== socket.id);
+            if (specificRoomCode) socket.leave(roomCode);
+            
+            if (room.players.filter(p => !p.isBot).length === 0) {
+                delete coupRooms[roomCode];
+            } else {
+                if (room.phase === 'GAME' && room.players.filter(p => !p.isDead).length < 2) {
+                    room.phase = 'GAME_OVER';
+                    room.winner = room.players.find(p => !p.isDead)?.name || '생존자 없음';
+                } else if (room.phase === 'GAME' && room.turnId === socket.id) {
+                    do {
+                        room.turnIndex = (room.turnIndex + 1) % room.players.length;
+                    } while (room.players[room.turnIndex].isDead);
+                    room.turnId = room.players[room.turnIndex].id;
+                } else if (room.phase === 'LOBBY' && room.players[0]) {
+                    room.players[0].ready = true;
+                }
+                coupIo.to(roomCode).emit('roomUpdate', room);
+            }
+        }
+    });
+}
+
+
 const PORT = process.env.PORT || 10000;
-server.listen(PORT, () => { console.log(`🚀 포커 & 플립7 서버 구동 완료. 포트 ${PORT}`); });
+server.listen(PORT, () => { 
+    console.log(`🚀 포커, 플립7 & COUP 서버 구동 완료. 포트 ${PORT}`); 
+});
