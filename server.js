@@ -548,7 +548,6 @@ function nextTurnCoup(room, roomCode) {
     } while (room.players[room.turnIndex].isDead);
     room.turnId = room.players[room.turnIndex].id;
 
-    // [수정] 최초 턴 시작 시 기준: 60초 타이머 설정 및 시간 초과 시 자동 소득 처리
     startCoupTimer(room, roomCode, 60, () => {
         const currentRoom = coupRooms[roomCode];
         if (!currentRoom || currentRoom.phase !== 'GAME') return;
@@ -587,7 +586,6 @@ function setNextBlocker(room, roomCode) {
     }
 
     if (found) {
-        // [수정] 선택창(방어 여부) 진입 시: 30초 타이머로 전환 및 시간 초과 시 '아니오(방어 안 함)' 처리 리셋
         startCoupTimer(room, roomCode, 30, () => processBlockResponse(room, roomCode, room.actionState.currentPromptId, false));
     } else {
         clearCoupTimer(room);
@@ -605,12 +603,11 @@ function setNextBlocker(room, roomCode) {
 }
 
 function processBlockResponse(room, roomCode, playerId, block) {
-    clearCoupTimer(room); // 선택시 타이머 리셋
+    clearCoupTimer(room);
     if (block) { 
         room.actionState.blockerId = playerId;
         room.actionState.phase = 'WAIT_CHALLENGE';
         
-        // [수정] 챌린지 선택창 진입 시: 30초 타이머 및 시간 초과 시 '아니오(도전 안 함)' 처리 리셋
         startCoupTimer(room, roomCode, 30, () => processChallengeResponse(room, roomCode, room.actionState.actorId, false));
     } else { 
         room.actionState.askedList.push(playerId);
@@ -621,17 +618,18 @@ function processBlockResponse(room, roomCode, playerId, block) {
 }
 
 function processChallengeResponse(room, roomCode, playerId, challenge) {
-    clearCoupTimer(room); // 선택시 타이머 리셋
+    clearCoupTimer(room);
     if (challenge) { 
         room.actionState.phase = 'REVEAL_CARD';
         room.actionState.revealerId = (room.actionState.type === 'DUKE') ? room.actionState.actorId : room.actionState.blockerId;
         
-        // [수정] 카드 공개 선택창 진입 시: 30초 타이머 및 시간 초과 시 첫 번째 카드 자동 공개 처리 리셋
         startCoupTimer(room, roomCode, 30, () => {
-            const revealer = room.players.find(p => p.id === room.actionState.revealerId);
+            const currentRoom = coupRooms[roomCode];
+            if (!currentRoom || !currentRoom.actionState || currentRoom.actionState.phase !== 'REVEAL_CARD') return;
+            const revealer = currentRoom.players.find(p => p.id === currentRoom.actionState.revealerId);
             if (revealer) {
                 const idx = revealer.influence.findIndex(c => c.alive);
-                if (idx !== -1) processRevealCard(room, roomCode, revealer.id, idx);
+                if (idx !== -1) processRevealCard(currentRoom, roomCode, revealer.id, idx);
             }
         });
     } else {
@@ -651,8 +649,9 @@ function processChallengeResponse(room, roomCode, playerId, challenge) {
 }
 
 function processRevealCard(room, roomCode, revealerId, cardIndex) {
-    clearCoupTimer(room); // 카드 선택시 타이머 리셋
+    clearCoupTimer(room);
     const revealer = room.players.find(p => p.id === revealerId);
+    if (!revealer) return;
     const card = revealer.influence[cardIndex];
     if (!card || !card.alive) return;
 
@@ -666,42 +665,48 @@ function processRevealCard(room, roomCode, revealerId, cardIndex) {
     });
 
     setTimeout(() => {
-        if (room.actionState.type === 'DUKE') {
-            const blocker = room.players.find(p => p.id === room.actionState.blockerId);
+        const currentRoom = coupRooms[roomCode];
+        if (!currentRoom) return;
+        const currentRevealer = currentRoom.players.find(p => p.id === revealerId);
+        if (!currentRevealer) return;
+        const currentCard = currentRevealer.influence[cardIndex];
+
+        if (currentRoom.actionState && currentRoom.actionState.type === 'DUKE') {
+            const blocker = currentRoom.players.find(p => p.id === currentRoom.actionState.blockerId);
             if (isSuccess) {
-                room.deck.push('공작');
-                room.deck.sort(() => Math.random() - 0.5);
-                revealer.influence[cardIndex].role = room.deck.pop();
+                currentRoom.deck.push('공작');
+                currentRoom.deck.sort(() => Math.random() - 0.5);
+                currentCard.role = currentRoom.deck.pop();
                 
-                revealer.coins += 3;
+                currentRevealer.coins += 3;
                 if (blocker) killCoupInfluence(blocker); 
             } else {
-                revealer.influence[cardIndex].alive = false;
-                if (!revealer.influence.some(c => c.alive)) revealer.isDead = true;
-                coupIo.to(roomCode).emit('actionAnnounce', { actorName: revealer.name, actionText: '징세를 실패했습니다.' });
+                currentCard.alive = false;
+                if (!currentRevealer.influence.some(c => c.alive)) currentRevealer.isDead = true;
+                coupIo.to(roomCode).emit('actionAnnounce', { actorName: currentRevealer.name, actionText: '징세를 실패했습니다.' });
             }
-        } else {
-            const actor = room.players.find(p => p.id === room.actionState.actorId);
+        } else if (currentRoom.actionState) {
+            const actor = currentRoom.players.find(p => p.id === currentRoom.actionState.actorId);
             if (isSuccess) {
-                room.deck.push('공작');
-                room.deck.sort(() => Math.random() - 0.5);
-                revealer.influence[cardIndex].role = room.deck.pop();
+                currentRoom.deck.push('공작');
+                currentRoom.deck.sort(() => Math.random() - 0.5);
+                currentCard.role = currentRoom.deck.pop();
                 if(actor) coupIo.to(roomCode).emit('actionAnnounce', { actorName: actor.name, actionText: '원조에 실패했습니다.' });
             } else {
-                revealer.influence[cardIndex].alive = false;
-                if (!revealer.influence.some(c => c.alive)) revealer.isDead = true;
+                currentCard.alive = false;
+                if (!currentRevealer.influence.some(c => c.alive)) currentRevealer.isDead = true;
                 if(actor) actor.coins += 2;
             }
         }
 
-        const alivePlayers = room.players.filter(p => !p.isDead);
+        const alivePlayers = currentRoom.players.filter(p => !p.isDead);
         if (alivePlayers.length <= 1) {
-            room.phase = 'GAME_OVER';
-            room.winner = alivePlayers[0]?.name || '생존자 없음';
-            emitCoupUpdate(roomCode, room);
+            currentRoom.phase = 'GAME_OVER';
+            currentRoom.winner = alivePlayers[0]?.name || '생존자 없음';
+            emitCoupUpdate(roomCode, currentRoom);
         } else {
-            room.actionState = null;
-            nextTurnCoup(room, roomCode);
+            currentRoom.actionState = null;
+            nextTurnCoup(currentRoom, roomCode);
         }
     }, 3000);
 }
@@ -790,8 +795,9 @@ coupIo.on('connection', (socket) => {
                 ];
             });
             
-            let startingIndex = Math.floor(Math.random() * room.players.length);
-            room.turnIndex = startingIndex === 0 ? room.players.length - 1 : startingIndex - 1;
+            // [수정] 최초 시작 시 방장이 아니라 무조건 랜덤한 플레이어가 선(턴)을 잡도록 설정
+            room.turnIndex = Math.floor(Math.random() * room.players.length);
+            room.turnId = room.players[room.turnIndex].id;
             
             coupIo.to(roomCode).emit('gameStarted', room);
             nextTurnCoup(room, roomCode);
@@ -807,7 +813,7 @@ coupIo.on('connection', (socket) => {
             const target = room.players.find(p => p.id === targetId);
 
             if (socket.id !== room.turnId || actor.isDead || room.actionState) return;
-            clearCoupTimer(room); // 액션 제출 시 60초 타이머 리셋
+            clearCoupTimer(room);
 
             if (action === 'FOREIGN_AID') {
                 room.actionState = { phase: 'ANNOUNCING' }; 
