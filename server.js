@@ -933,7 +933,7 @@ coupIo.on('connection', (socket) => {
                         phase: 'WAIT_BLOCK'
                     };
                     setNextBlocker(currentRoom, roomCode);
-                    emitCoupUpdate(roomCode, currentRoom);
+                    emitCoupUpdate(currentRoom, currentRoom);
                 }, 1500);
                 return;
             }
@@ -965,17 +965,68 @@ coupIo.on('connection', (socket) => {
                 target.coins -= stealAmount;
                 actor.coins += stealAmount;
             } else if (action === 'AMBASSADOR') {
-                actor.influence.forEach(c => { if (c.alive) room.deck.push(c.role); });
-                room.deck.sort(() => Math.random() - 0.5);
-                actor.influence = actor.influence.map(c => {
-                    if (c.alive) return { role: room.deck.pop(), alive: true };
-                    return c;
+                // 외교관(교환) 액션 실행: 살아있는 카드들과 덱에서 2장을 뽑아 4장을 구성한 뒤 플레이어에게 애니메이션 전송
+                const aliveCards = actor.influence.filter(c => c.alive).map(c => c.role);
+                const drawn1 = room.deck.pop();
+                const drawn2 = room.deck.pop();
+                const allFour = [...aliveCards, drawn1, drawn2];
+
+                // 임시로 뽑은 카드들을 room 객체에 저장해둠 (선택 완료 시 처리용)
+                room.tempAmbassadorCards = {
+                    playerId: actor.id,
+                    drawnCards: allFour
+                };
+
+                coupIo.to(socket.id).emit('startAmbassadorAnim', {
+                    actorId: actor.id,
+                    drawnCards: allFour
                 });
+
+                coupIo.to(roomCode).emit('actionAnnounce', { actorName: actor.name, actionText: '카드를 교환합니다.' });
+                return;
             }
 
             const alivePlayers = room.players.filter(p => !p.isDead);
             if (alivePlayers.length <= 1) {
                 room.phase = 'GAME_OVER'; 
+                room.winner = alivePlayers[0]?.name || '생존자 없음';
+                emitCoupUpdate(roomCode, room);
+            } else {
+                nextTurnCoup(room, roomCode);
+            }
+        } catch(e) {}
+    });
+
+    // 🌟 외교관 카드 선택 완료 처리 리스너
+    socket.on('ambassadorChosen', ({ roomCode, keepIndices, returnIndices }) => {
+        try {
+            const room = coupRooms[roomCode];
+            if (!room || !room.tempAmbassadorCards || room.tempAmbassadorCards.playerId !== socket.id) return;
+
+            const actor = room.players.find(p => p.id === socket.id);
+            if (!actor) return;
+
+            const { drawnCards } = room.tempAmbassadorCards;
+            const keptRoles = keepIndices.map(i => drawnCards[i]);
+            const returnedRoles = returnIndices.map(i => drawnCards[i]);
+
+            // 돌아온 카드들을 덱에 다시 넣고 섞기
+            returnedRoles.forEach(role => room.deck.push(role));
+            room.deck.sort(() => Math.random() - 0.5);
+
+            // 플레이어의 살아있는 카드들을 선택한 2장으로 갱신
+            let aliveIdx = 0;
+            actor.influence.forEach(c => {
+                if (c.alive && aliveIdx < keptRoles.length) {
+                    c.role = keptRoles[aliveIdx++];
+                }
+            });
+
+            room.tempAmbassadorCards = null;
+
+            const alivePlayers = room.players.filter(p => !p.isDead);
+            if (alivePlayers.length <= 1) {
+                room.phase = 'GAME_OVER';
                 room.winner = alivePlayers[0]?.name || '생존자 없음';
                 emitCoupUpdate(roomCode, room);
             } else {
