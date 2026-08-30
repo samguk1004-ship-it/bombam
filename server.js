@@ -421,12 +421,18 @@ function processRevealCard(room, roomCode, revealerId, cardIndex) {
 
         if (curActionType === 'COUP' || curActionType === 'ASSASSIN_DEATH' || curActionType === 'ASSASSIN_ATTACKER_DEATH' || curActionType === 'CHALLENGER_PENALTY' || curActionType === 'DUKE_BLOCKER_PENALTY') {
             currentCard.alive = false;
-            if (!currentRevealer.influence.some(c => c.alive)) currentRevealer.isDead = true;
+            
+            // 🛑 남은 생존 카드 여부를 정확히 확인하여 확실하게 사망 처리
+            const hasAliveCards = currentRevealer.influence.some(c => c.alive);
+            if (!hasAliveCards) {
+                currentRevealer.isDead = true;
+            }
 
             const alivePlayers = currentRoom.players.filter(p => !p.isDead);
             if (alivePlayers.length <= 1) {
                 currentRoom.phase = 'GAME_OVER';
                 currentRoom.winner = alivePlayers[0]?.name || '생존자 없음';
+                currentRoom.actionState = null;
                 emitCoupUpdate(roomCode, currentRoom);
                 return;
             } else {
@@ -438,9 +444,10 @@ function processRevealCard(room, roomCode, revealerId, cardIndex) {
                     coupIo.to(roomCode).emit('actionAnnounce', { actorName: curActorName, actionText: '암살 실패로 카드를 잃었습니다.' });
                 }
                 
+                // 🛑 액션 상태 초기화 후 올바른 roomCode 인자로 다음 턴 전환 호출
                 currentRoom.actionState = null;
-                nextTurnCoup(currentRoom, currentRoom);
-                emitCoupUpdate(currentRoom, currentRoom);
+                nextTurnCoup(currentRoom, roomCode);
+                emitCoupUpdate(roomCode, currentRoom);
                 return;
             }
         } else if (curActionType === 'ASSASSIN_BLOCK_CHALLENGE') {
@@ -459,7 +466,7 @@ function processRevealCard(room, roomCode, revealerId, cardIndex) {
                         revealerId: currentActor.id,
                         type: 'ASSASSIN_ATTACKER_DEATH'
                     };
-                    emitCoupUpdate(currentRoom, currentRoom);
+                    emitCoupUpdate(roomCode, currentRoom);
                     startCoupTimer(currentRoom, roomCode, 30, () => {
                         const curR = coupRooms[roomCode];
                         if (!curR || !curR.actionState || curR.actionState.phase !== 'REVEAL_CARD') return;
@@ -472,7 +479,7 @@ function processRevealCard(room, roomCode, revealerId, cardIndex) {
                     return;
                 } else {
                     currentRoom.actionState = null;
-                    nextTurnCoup(currentRoom, currentRoom);
+                    nextTurnCoup(currentRoom, roomCode);
                     emitCoupUpdate(currentRoom, currentRoom);
                     return;
                 }
@@ -497,8 +504,8 @@ function processRevealCard(room, roomCode, revealerId, cardIndex) {
                 coupIo.to(roomCode).emit('actionAnnounce', { actorName: curActorName, actionText: '해외 원조를 실패했습니다.' });
                 
                 currentRoom.actionState = null;
-                nextTurnCoup(currentRoom, currentRoom);
-                emitCoupUpdate(currentRoom, currentRoom);
+                nextTurnCoup(currentRoom, roomCode);
+                emitCoupUpdate(roomCode, currentRoom);
                 return;
             } else {
                 currentCard.alive = false;
@@ -538,7 +545,7 @@ function processRevealCard(room, roomCode, revealerId, cardIndex) {
                     return;
                 } else {
                     currentRoom.actionState = null;
-                    nextTurnCoup(currentRoom, currentRoom);
+                    nextTurnCoup(currentRoom, roomCode);
                     emitCoupUpdate(currentRoom, currentRoom);
                     return;
                 }
@@ -580,7 +587,7 @@ function processRevealCard(room, roomCode, revealerId, cardIndex) {
                     return;
                 } else {
                     currentRoom.actionState = null;
-                    nextTurnCoup(currentRoom, currentRoom);
+                    nextTurnCoup(currentRoom, roomCode);
                     emitCoupUpdate(currentRoom, currentRoom);
                     return;
                 }
