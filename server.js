@@ -409,7 +409,6 @@ function processRevealCard(room, roomCode, revealerId, cardIndex) {
                 emitCoupUpdate(roomCode, currentRoom);
                 return;
             } else {
-                // 도전자 패배 벌칙 후 턴 종료 처리
                 if (curActionType === 'CHALLENGER_PENALTY') {
                     coupIo.to(roomCode).emit('actionAnnounce', { actorName: curActorName, actionText: '도전 실패로 카드를 잃었습니다. (강탈 방어 성공)' });
                 }
@@ -442,7 +441,6 @@ function processRevealCard(room, roomCode, revealerId, cardIndex) {
             }
         } else if (curActionType === 'ASSASSIN_BLOCK_CHALLENGE' || curActionType === 'CAPTAIN_BLOCK_CHALLENGE' || curActionType === 'CAPTAIN') {
             if (isSuccess) {
-                // 방어 성공: 방어자의 카드를 덱에 넣고 섞은 뒤 새 카드로 교체 (Deck Swap)
                 const matchedRole = currentCard.role;
                 currentRoom.deck.push(matchedRole);
                 currentRoom.deck.sort(() => Math.random() - 0.5);
@@ -450,7 +448,6 @@ function processRevealCard(room, roomCode, revealerId, cardIndex) {
                 
                 coupIo.to(roomCode).emit('actionAnnounce', { actorName: curActorName, actionText: '방어 성공! 도전자(액션 시도자)에게 패배 벌칙이 부여됩니다.' });
                 
-                // [수정 핵심] 강탈/암살 방어 성공 시 도전했던 사람(actor)에게 카드 선택(사망) 벌칙 부여 단계로 전환
                 if (currentActor && !currentActor.isDead) {
                     currentRoom.actionState = {
                         ...currentRoom.actionState,
