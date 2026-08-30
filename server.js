@@ -107,19 +107,30 @@ function emitCoupUpdate(roomCode, room) {
     coupIo.to(roomCode).emit('roomUpdate', safeRoom);
 }
 
-function startCoupTimer(room, roomCode, durationSec, callback) {
-    if (room.timer && room.timer.timeoutId) clearTimeout(room.timer.timeoutId);
-    room.timer = {
-        endTime: Date.now() + durationSec * 1000,
-        duration: durationSec,
-        timeoutId: setTimeout(() => { callback(); }, durationSec * 1000)
-    };
-    emitCoupUpdate(roomCode, room);
+function clearCoupTimer(room) {
+    if (room.timer && room.timer.timeoutId) {
+        clearTimeout(room.timer.timeoutId);
+        room.timer.timeoutId = null;
+    }
+    room.timer = null;
 }
 
-function clearCoupTimer(room) {
-    if (room.timer && room.timer.timeoutId) clearTimeout(room.timer.timeoutId);
-    room.timer = null;
+function startCoupTimer(room, roomCode, durationSec, callback) {
+    clearCoupTimer(room);
+    const durationMs = durationSec * 1000;
+    const endTime = Date.now() + durationMs;
+    
+    room.timer = {
+        endTime: endTime,
+        duration: durationSec,
+        timeoutId: setTimeout(() => {
+            if (room.timer && room.timer.endTime === endTime) {
+                room.timer = null;
+                callback();
+            }
+        }, durationMs)
+    };
+    emitCoupUpdate(roomCode, room);
 }
 
 const createCoupDeck = (playerCount) => {
@@ -141,7 +152,7 @@ function nextTurnCoup(room, roomCode) {
     } while (room.players[room.turnIndex].isDead);
     room.turnId = room.players[room.turnIndex].id;
 
-    // 일반 턴 시작 시 60초 타이머 시작 및 리셋
+    // 60초 턴 타이머 시작 및 완벽 리셋
     startCoupTimer(room, roomCode, 60, () => {
         const currentRoom = coupRooms[roomCode];
         if (!currentRoom || currentRoom.phase !== 'GAME') return;
@@ -170,7 +181,7 @@ function setNextBlocker(room, roomCode) {
 
     if ((room.actionState.type === 'CAPTAIN' || room.actionState.type === 'ASSASSIN') && targetPlayer && !targetPlayer.isDead && !room.actionState.askedList.includes(targetPlayer.id)) {
         room.actionState.currentPromptId = targetPlayer.id;
-        // 선택창 진입 시 30초 타이머 시작 및 리셋
+        // 선택 창 30초 타이머 시작 및 완벽 리셋
         startCoupTimer(room, roomCode, 30, () => {
             const curRoom = coupRooms[roomCode];
             if (!curRoom || !curRoom.actionState || curRoom.actionState.phase !== 'WAIT_BLOCK') return;
@@ -198,7 +209,6 @@ function setNextBlocker(room, roomCode) {
     }
 
     if (found) {
-        // 선택창 진입 시 30초 타이머 시작 및 리셋
         startCoupTimer(room, roomCode, 30, () => {
             const curRoom = coupRooms[roomCode];
             if (!curRoom || !curRoom.actionState || curRoom.actionState.phase !== 'WAIT_BLOCK') return;
@@ -248,7 +258,7 @@ function processBlockResponse(room, roomCode, playerId, block, blockRole) {
         
         room.actionState.phase = 'WAIT_CHALLENGE';
         emitCoupUpdate(roomCode, room);
-        // 도전 선택창 30초 타이머 시작 및 리셋
+        // 도전 선택 창 30초 타이머 시작 및 완벽 리셋
         startCoupTimer(room, roomCode, 30, () => {
             const curRoom = coupRooms[roomCode];
             if (!curRoom || !curRoom.actionState || curRoom.actionState.phase !== 'WAIT_CHALLENGE') return;
@@ -300,7 +310,7 @@ function processChallengeResponse(room, roomCode, playerId, challenge) {
         room.actionState.phase = 'REVEAL_CARD';
         room.actionState.revealerId = room.actionState.blockerId;
         
-        // 카드 선택창 30초 타이머 시작 및 리셋
+        // 카드 선택 창 30초 타이머 시작 및 완벽 리셋
         startCoupTimer(room, roomCode, 30, () => {
             const currentRoom = coupRooms[roomCode];
             if (!currentRoom || !currentRoom.actionState || currentRoom.actionState.phase !== 'REVEAL_CARD') return;
@@ -528,7 +538,7 @@ coupIo.on('connection', (socket) => {
                 actor.coins -= 7;
                 room.actionState = { type: 'COUP', actorId: actor.id, revealerId: target.id, phase: 'REVEAL_CARD' };
                 emitCoupUpdate(roomCode, room);
-                // 쿠 대상 카드 선택 30초 타이머 시작 및 리셋
+                // 쿠 대상 카드 선택 30초 타이머 시작 및 완벽 리셋
                 startCoupTimer(room, roomCode, 30, () => {
                     const currentRoom = coupRooms[roomCode];
                     if (!currentRoom || !currentRoom.actionState || currentRoom.actionState.phase !== 'REVEAL_CARD') return;
@@ -572,7 +582,7 @@ coupIo.on('connection', (socket) => {
                     room.actionState.blockRole = blockRole || (room.actionState.type === 'ASSASSIN' ? '귀부인' : '사령관');
                     room.actionState.phase = 'WAIT_CHALLENGE';
                     emitCoupUpdate(roomCode, room);
-                    // 도전 선택창 30초 타이머 시작 및 리셋
+                    // 도전 선택창 30초 타이머 시작 및 완벽 리셋
                     startCoupTimer(room, roomCode, 30, () => {
                         const curRoom = coupRooms[roomCode];
                         if (!curRoom || !curRoom.actionState || curRoom.actionState.phase !== 'WAIT_CHALLENGE') return;
