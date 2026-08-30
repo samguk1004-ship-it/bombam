@@ -464,10 +464,11 @@ coupIo.on('connection', (socket) => {
                 delete coupDisconnectTimers[disconnectKey];
             }
 
+            // userId 또는 닉네임이 일치하는 기존 플레이어 검색 (재접속 판정)
             let existingPlayer = room.players.find(p => (userId && p.userId === userId) || p.name === userName);
             
             if (!existingPlayer) {
-                // 이미 게임이 시작된 방에 다른 아이디로 접속한 경우 -> 관전자로 등록
+                // 이미 게임이 시작된 방에 아예 새로운 유저가 접속한 경우 -> 관전자 처리
                 if (room.phase === 'GAME') {
                     if (!room.spectators) room.spectators = [];
                     let existingSpec = room.spectators.find(s => (userId && s.userId === userId) || s.name === userName);
@@ -480,18 +481,17 @@ coupIo.on('connection', (socket) => {
                     return;
                 }
 
-                // 대기실(LOBBY)인 경우 정상 참여
+                // 대기실(LOBBY)인 경우 새 플레이어로 정상 참여
                 room.players.push({
                     id: socket.id, name: userName, userId, isBot, ready: room.players.length === 0,
                     coins: 2, influence: [], isDead: false, connected: true
                 });
             } else {
-                // 기존 플레이어가 1분 내 재접속한 경우 -> 세션 복구
+                // 기존 플레이어가 1분 이내에 재접속한 경우 -> 소켓 ID 갱신 및 기존 게임 상태(코인, 카드 등) 그대로 복구!
                 existingPlayer.id = socket.id;
                 existingPlayer.connected = true;
                 existingPlayer.isReconnecting = false;
                 
-                // 혹시 관전자 목록에 겹쳐있다면 제거
                 if (room.spectators) {
                     room.spectators = room.spectators.filter(s => s.userId !== userId);
                 }
@@ -613,7 +613,7 @@ coupIo.on('connection', (socket) => {
                     const p = curRoom.players.find(pl => pl.id === actor.id);
                     if (p) {
                         curRoom.actionState = null;
-                        nextTurnCoup(curRoom, roomCode);
+                        nextTurnCoup(room, roomCode);
                         emitCoupUpdate(curRoom, curRoom);
                     }
                 });
@@ -727,13 +727,12 @@ coupIo.on('connection', (socket) => {
         } catch(e){}
     });
 
-    // ⏱️ [튕김 및 재접속 관리] 연결 해제 시 관전자는 즉시 제거, 게임 중 플레이어는 1분 유예 후 미복구 시 퇴장 처리
+    // ⏱️ [튕김 및 재접속 관리] 연결 해제 시 1분 동안 세션을 보존하며, 1분 내 재접속하지 않으면 방에서 완전히 퇴장 처리
     socket.on('disconnect', () => {
         try {
             for (let roomCode in coupRooms) {
                 const room = coupRooms[roomCode];
                 
-                // 관전자일 경우 즉시 제거
                 if (room.spectators) {
                     room.spectators = room.spectators.filter(s => s.id !== socket.id);
                 }
@@ -745,7 +744,6 @@ coupIo.on('connection', (socket) => {
                     
                     if (coupDisconnectTimers[disconnectKey]) clearTimeout(coupDisconnectTimers[disconnectKey]);
                     
-                    // 로비 상태일 때는 즉시 제거
                     if (room.phase === 'LOBBY') {
                         room.players = room.players.filter(p => p.id !== socket.id);
                         if (room.players.length === 0) {
@@ -755,7 +753,7 @@ coupIo.on('connection', (socket) => {
                             emitCoupUpdate(roomCode, room);
                         }
                     } else {
-                        // 게임 중 튕겼을 때 1분(60초) 유예 부여
+                        // 1분(60초) 유예 타이머 설정
                         coupDisconnectTimers[disconnectKey] = setTimeout(() => {
                             delete coupDisconnectTimers[disconnectKey];
                             const currentRoom = coupRooms[roomCode];
