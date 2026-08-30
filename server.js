@@ -602,7 +602,6 @@ function nextTurnCoup(room, roomCode) {
     } while (room.players[room.turnIndex].isDead);
     room.turnId = room.players[room.turnIndex].id;
 
-    // 턴당 60초 제한 시간 연동 (시간 초과 시 자동으로 소득(+1) 챙기고 다음 턴으로 정상 진행)
     startCoupTimer(room, roomCode, 60, () => {
         const currentRoom = coupRooms[roomCode];
         if (!currentRoom || currentRoom.phase !== 'GAME') return;
@@ -641,7 +640,6 @@ function setNextBlocker(room, roomCode) {
     }
 
     if (found) {
-        // 블록 질문 선택 시 30초 제한 시간 연동
         startCoupTimer(room, roomCode, 30, () => processBlockResponse(room, roomCode, room.actionState.currentPromptId, false));
     } else {
         clearCoupTimer(room);
@@ -664,7 +662,6 @@ function processBlockResponse(room, roomCode, playerId, block) {
         room.actionState.blockerId = playerId;
         room.actionState.phase = 'WAIT_CHALLENGE';
         
-        // 챌린지 질문 선택 시 30초 제한 시간 연동
         startCoupTimer(room, roomCode, 30, () => processChallengeResponse(room, roomCode, room.actionState.actorId, false));
     } else { 
         room.actionState.askedList.push(playerId);
@@ -680,7 +677,6 @@ function processChallengeResponse(room, roomCode, playerId, challenge) {
         room.actionState.phase = 'REVEAL_CARD';
         room.actionState.revealerId = (room.actionState.type === 'DUKE') ? room.actionState.actorId : room.actionState.blockerId;
         
-        // 카드 공개 질문 선택 시 30초 제한 시간 연동
         startCoupTimer(room, roomCode, 30, () => {
             const revealer = room.players.find(p => p.id === room.actionState.revealerId);
             if (revealer) {
@@ -949,8 +945,45 @@ coupIo.on('connection', (socket) => {
 
     socket.on('leaveRoom', (roomCode) => leaveCoupRoom(socket, roomCode));
     
+    // [보완] 쿠(COUP) 연결 끊김 시 세션 유지 및 타이머 처리 로직 추가
     socket.on('disconnect', () => {
-        try { leaveCoupRoom(socket, null); } catch(e) {}
+        try {
+            for (const roomCode in coupRooms) {
+                const room = coupRooms[roomCode];
+                const player = room.players.find(p => p.id === socket.id);
+                if (player) {
+                    player.connected = false;
+                    
+                    if (room.phase === 'GAME') {
+                        // 게임 중 일시적 끊김 발생 시 30초 동안 유예 (세션 유지)
+                        if (!room.timers) room.timers = {};
+                        room.timers[player.userId || player.id] = setTimeout(() => {
+                            try {
+                                const currentRoom = coupRooms[roomCode];
+                                if (!currentRoom) return;
+                                
+                                currentRoom.players = currentRoom.players.filter(p => p.id !== socket.id);
+                                if (currentRoom.players.filter(p => !p.isBot && p.connected).length === 0) {
+                                    clearCoupTimer(currentRoom);
+                                    delete coupRooms[roomCode];
+                                } else {
+                                    if (currentRoom.phase === 'GAME' && currentRoom.players.filter(p => !p.isDead).length < 2) {
+                                        clearCoupTimer(currentRoom);
+                                        currentRoom.phase = 'GAME_OVER';
+                                        currentRoom.winner = currentRoom.players.find(p => !p.isDead)?.name || '생존자 없음';
+                                    } else if (currentRoom.phase === 'GAME' && currentRoom.turnId === socket.id) {
+                                        nextTurnCoup(currentRoom, roomCode);
+                                    }
+                                    emitCoupUpdate(roomCode, currentRoom);
+                                }
+                            } catch(err) {}
+                        }, 30000);
+                    } else {
+                        leaveCoupRoom(socket, roomCode);
+                    }
+                }
+            }
+        } catch(e) {}
     });
 });
 
