@@ -657,7 +657,7 @@ function processBlockResponse(room, roomCode, playerId, block) {
             if (target && !target.isDead) {
                 room.actionState.phase = 'REVEAL_CARD';
                 room.actionState.revealerId = target.id;
-                room.actionState.type = 'ASSASSIN_DEATH'; // ✅ 암살 방어 거부 시 수비자가 카드 잃는 단계로 정상 설정
+                room.actionState.type = 'ASSASSIN_DEATH';
                 emitCoupUpdate(roomCode, room);
                 return;
             }
@@ -708,11 +708,9 @@ function processRevealCard(room, roomCode, revealerId, cardIndex) {
     const actionType = room.actionState ? room.actionState.type : '';
     
     let isSuccess = false;
-    let revealedRoleToAnim = card.role;
-
     if (actionType === 'ASSASSIN_BLOCK_CHALLENGE') {
-        isSuccess = true; 
-        revealedRoleToAnim = '귀부인';
+        // ✅ 선택한 카드가 실제로 '귀부인'인지 엄격하게 확인 (블러핑 실패 시 거짓 판정)
+        isSuccess = (card.role === '귀부인');
     } else if (actionType === 'DUKE') {
         isSuccess = (card.role === '공작');
     } else if (actionType === 'FOREIGN_AID') {
@@ -722,7 +720,7 @@ function processRevealCard(room, roomCode, revealerId, cardIndex) {
     coupIo.to(roomCode).emit('blockRevealAnimation', {
         revealerId: revealer.id,
         cardIndex: cardIndex,
-        revealedRole: revealedRoleToAnim,
+        revealedRole: card.role, // ✅ 실제 선택한 카드의 역할을 그대로 애니메이션에 전달
         isSuccess: isSuccess
     });
 
@@ -751,17 +749,31 @@ function processRevealCard(room, roomCode, revealerId, cardIndex) {
                 return;
             }
         } else if (curActionType === 'ASSASSIN_BLOCK_CHALLENGE') {
-            currentCard.role = '귀부인';
-            coupIo.to(roomCode).emit('actionAnnounce', { actorName: '', actionText: '암살에 실패했습니다.' });
-            
-            setTimeout(() => {
-                if (!currentRoom) return;
-                currentRoom.actionState.phase = 'REVEAL_CARD';
-                currentRoom.actionState.revealerId = currentRoom.actionState.actorId; 
-                currentRoom.actionState.type = 'ASSASSIN_ATTACKER_DEATH';
-                emitCoupUpdate(roomCode, currentRoom);
-            }, 2000);
-            return;
+            const actor = currentRoom.players.find(p => p.id === currentRoom.actionState.actorId);
+
+            if (isSuccess) {
+                // 진퉁 귀부인을 낸 경우: 덱과 교환 후 암살 실패 처리 및 공격자 패널티 단계로 진입
+                currentRoom.deck.push('귀부인');
+                currentRoom.deck.sort(() => Math.random() - 0.5);
+                currentCard.role = currentRoom.deck.pop();
+                
+                coupIo.to(roomCode).emit('actionAnnounce', { actorName: '', actionText: '암살에 실패했습니다.' });
+                
+                setTimeout(() => {
+                    if (!currentRoom) return;
+                    currentRoom.actionState.phase = 'REVEAL_CARD';
+                    currentRoom.actionState.revealerId = currentRoom.actionState.actorId; 
+                    currentRoom.actionState.type = 'ASSASSIN_ATTACKER_DEATH';
+                    emitCoupUpdate(roomCode, currentRoom);
+                }, 2000);
+                return;
+            } else {
+                // 짭퉁(다른 카드)을 낸 경우 (블러핑 실패): 해당 카드가 죽고 암살은 그대로 성공!
+                currentCard.alive = false;
+                if (!currentRevealer.influence.some(c => c.alive)) currentRevealer.isDead = true;
+                
+                coupIo.to(roomCode).emit('actionAnnounce', { actorName: actor ? actor.name : '', actionText: '암살 방어 실패! 암살에 성공했습니다.' });
+            }
         }
 
         const alivePlayers = currentRoom.players.filter(p => !p.isDead);
