@@ -681,7 +681,7 @@ coupIo.on('connection', (socket) => {
                 return;
             }
 
-            // 나머지 액션들 (현재는 즉시 처리 - 추후 확장을 위해 동일한 구조로 변경 가능)
+            // 나머지 액션들 
             if (action === 'INCOME') actor.coins += 1;
             else if (action === 'DUKE') actor.coins += 3;
             else if (action === 'COUP' && target) { actor.coins -= 7; killCoupInfluence(target); }
@@ -715,43 +715,39 @@ coupIo.on('connection', (socket) => {
             const room = coupRooms[roomCode];
             if (!room || !room.actionState || room.actionState.currentPromptId !== socket.id) return;
             
-            if (block) { // "예" 선택 (방해함)
+            if (block) { 
                 room.actionState.blockerId = socket.id;
                 room.actionState.phase = 'WAIT_CHALLENGE';
-            } else { // "아니오" 선택 (넘어감)
+            } else { 
                 room.actionState.askedList.push(socket.id);
-                coupIo.to(roomCode).emit('showOkEmote', socket.id); // OK 애니메이션 발생
+                coupIo.to(roomCode).emit('showOkEmote', socket.id); 
                 setNextBlocker(room);
             }
             coupIo.to(roomCode).emit('roomUpdate', room);
         } catch(e){}
     });
 
-    // 쟤가 방해했는데 카드 확인할거야? 에 대한 응답
+    // 방해했는데 카드 확인할거야? 에 대한 응답
     socket.on('challengeResponse', ({ roomCode, challenge }) => {
         try {
             const room = coupRooms[roomCode];
             if (!room || !room.actionState || room.actionState.actorId !== socket.id) return;
 
-            if (challenge) { // "예" 선택 (확인함)
+            if (challenge) { 
                 const blocker = room.players.find(p => p.id === room.actionState.blockerId);
                 const actor = room.players.find(p => p.id === room.actionState.actorId);
                 
-                // 공작(Duke)이 진짜 있는지 확인
                 const hasDuke = blocker.influence.some(c => c.alive && c.role === '공작');
 
                 if (hasDuke) {
-                    // 방해 성공! 원조 사용자가 카드를 잃음
                     room.actionState.phase = 'LOSE_CARD';
                     room.actionState.loserId = actor.id;
                 } else {
-                    // 거짓말! 방해한 놈이 카드를 잃고, 원조는 성공함
                     actor.coins += 2;
                     room.actionState.phase = 'LOSE_CARD';
                     room.actionState.loserId = blocker.id;
                 }
             } else {
-                // "아니오" 선택 (방해 인정). 원조 실패 후 턴 넘어감
                 room.actionState = null;
                 nextTurnCoup(room);
             }
@@ -767,12 +763,10 @@ coupIo.on('connection', (socket) => {
 
             const loser = room.players.find(p => p.id === socket.id);
             if (loser && loser.influence[cardIndex] && loser.influence[cardIndex].alive) {
-                loser.influence[cardIndex].alive = false; // 카드 파괴
+                loser.influence[cardIndex].alive = false; 
                 
-                // 패를 다 잃었으면 사망 처리
                 if (!loser.influence.some(c => c.alive)) loser.isDead = true;
 
-                // 게임 종료 체크
                 const alivePlayers = room.players.filter(p => !p.isDead);
                 if (alivePlayers.length <= 1) {
                     room.phase = 'GAME_OVER';
