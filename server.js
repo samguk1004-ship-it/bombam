@@ -398,7 +398,7 @@ function processRevealCard(room, roomCode, revealerId, cardIndex) {
         const currentActor = currentRoom.players.find(p => p.id === currentRoom.actionState?.actorId);
         const curActorName = currentActor ? currentActor.name : '';
 
-        if (curActionType === 'COUP' || curActionType === 'ASSASSIN_DEATH' || curActionType === 'ASSASSIN_ATTACKER_DEATH') {
+        if (curActionType === 'COUP' || curActionType === 'ASSASSIN_DEATH' || curActionType === 'ASSASSIN_ATTACKER_DEATH' || curActionType === 'CHALLENGER_PENALTY') {
             currentCard.alive = false;
             if (!currentRevealer.influence.some(c => c.alive)) currentRevealer.isDead = true;
 
@@ -409,6 +409,10 @@ function processRevealCard(room, roomCode, revealerId, cardIndex) {
                 emitCoupUpdate(roomCode, currentRoom);
                 return;
             } else {
+                // 도전자 패배 벌칙 후 턴 종료 처리
+                if (curActionType === 'CHALLENGER_PENALTY') {
+                    coupIo.to(roomCode).emit('actionAnnounce', { actorName: curActorName, actionText: '도전 실패로 카드를 잃었습니다. (강탈 방어 성공)' });
+                }
                 currentRoom.actionState = null;
                 nextTurnCoup(currentRoom, roomCode);
                 emitCoupUpdate(currentRoom, currentRoom);
@@ -438,17 +442,39 @@ function processRevealCard(room, roomCode, revealerId, cardIndex) {
             }
         } else if (curActionType === 'ASSASSIN_BLOCK_CHALLENGE' || curActionType === 'CAPTAIN_BLOCK_CHALLENGE' || curActionType === 'CAPTAIN') {
             if (isSuccess) {
+                // 방어 성공: 방어자의 카드를 덱에 넣고 섞은 뒤 새 카드로 교체 (Deck Swap)
                 const matchedRole = currentCard.role;
                 currentRoom.deck.push(matchedRole);
                 currentRoom.deck.sort(() => Math.random() - 0.5);
                 currentCard.role = currentRoom.deck.pop();
                 
-                coupIo.to(roomCode).emit('actionAnnounce', { actorName: curActorName, actionText: '강탈에 실패하였습니다.' });
+                coupIo.to(roomCode).emit('actionAnnounce', { actorName: curActorName, actionText: '방어 성공! 도전자(액션 시도자)에게 패배 벌칙이 부여됩니다.' });
                 
-                currentRoom.actionState = null;
-                nextTurnCoup(currentRoom, currentRoom);
-                emitCoupUpdate(currentRoom, currentRoom);
-                return;
+                // [수정 핵심] 강탈/암살 방어 성공 시 도전했던 사람(actor)에게 카드 선택(사망) 벌칙 부여 단계로 전환
+                if (currentActor && !currentActor.isDead) {
+                    currentRoom.actionState = {
+                        ...currentRoom.actionState,
+                        phase: 'REVEAL_CARD',
+                        revealerId: currentActor.id,
+                        type: 'CHALLENGER_PENALTY'
+                    };
+                    emitCoupUpdate(roomCode, currentRoom);
+                    startCoupTimer(currentRoom, roomCode, 30, () => {
+                        const curR = coupRooms[roomCode];
+                        if (!curR || !curR.actionState || curR.actionState.phase !== 'REVEAL_CARD') return;
+                        const rev = curR.players.find(p => p.id === curR.actionState.revealerId);
+                        if (rev) {
+                            const idx = rev.influence.findIndex(c => c.alive);
+                            if (idx !== -1) processRevealCard(curR, roomCode, rev.id, idx);
+                        }
+                    });
+                    return;
+                } else {
+                    currentRoom.actionState = null;
+                    nextTurnCoup(currentRoom, currentRoom);
+                    emitCoupUpdate(currentRoom, currentRoom);
+                    return;
+                }
             } else {
                 currentCard.alive = false;
                 if (!currentRevealer.influence.some(c => c.alive)) currentRevealer.isDead = true;
@@ -578,7 +604,6 @@ coupIo.on('connection', (socket) => {
 
             clearCoupTimer(room);
 
-            // 강탈(CAPTAIN) 액션 선택 시 중복 선언 방지를 위해 바로 actionState 설정 후 방해 프로세스 진입
             if (action === 'CAPTAIN' && target) {
                 room.actionState = { type: 'CAPTAIN', actorId: actor.id, targetId: target.id, askedList: [], phase: 'WAIT_BLOCK' };
                 coupIo.to(roomCode).emit('actionAnnounce', { actorName: actor.name, actionText: `${actor.name}님이 ${target.name}님을 강탈합니다.` });
