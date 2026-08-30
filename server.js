@@ -586,11 +586,9 @@ function setNextBlocker(room) {
         nextIdx = (nextIdx + 1) % room.players.length;
     }
 
-    // 모든 사람이 방해하지 않고 통과했다면
     if (!found) {
         const actor = room.players.find(p => p.id === room.actionState.actorId);
         if (actor) {
-            // 원조 처리 완료
             if (room.actionState.type === 'FOREIGN_AID') actor.coins += 2;
         }
         room.actionState = null;
@@ -657,7 +655,6 @@ coupIo.on('connection', (socket) => {
         } catch(e) {}
     });
 
-    // 4. 최초 액션 제출
     socket.on('submitAction', ({ roomCode, action, targetId }) => {
         try {
             const room = coupRooms[roomCode];
@@ -668,7 +665,6 @@ coupIo.on('connection', (socket) => {
 
             if (socket.id !== room.turnId || actor.isDead || room.actionState) return;
 
-            // 원조 시: 문구를 먼저 브로드캐스트하고, 1.5초 딜레이 후에 질문창 띄우기
             if (action === 'FOREIGN_AID') {
                 coupIo.to(roomCode).emit('actionAnnounce', { actorName: actor.name, actionText: '원조를 사용했습니다.' });
                 
@@ -687,7 +683,6 @@ coupIo.on('connection', (socket) => {
                 return;
             }
 
-            // 나머지 액션들 
             if (action === 'INCOME') actor.coins += 1;
             else if (action === 'DUKE') actor.coins += 3;
             else if (action === 'COUP' && target) { actor.coins -= 7; killCoupInfluence(target); }
@@ -715,7 +710,6 @@ coupIo.on('connection', (socket) => {
         } catch(e) {}
     });
 
-    // 방해할거야? 에 대한 응답
     socket.on('blockResponse', ({ roomCode, block }) => {
         try {
             const room = coupRooms[roomCode];
@@ -733,39 +727,16 @@ coupIo.on('connection', (socket) => {
         } catch(e){}
     });
 
-    // 방해했는데 카드 확인할거야? 에 대한 응답
+    // ★ Challenge 발생 시 방해자에게 카드를 확인(선택)하도록 상태 변경 
     socket.on('challengeResponse', ({ roomCode, challenge }) => {
         try {
             const room = coupRooms[roomCode];
             if (!room || !room.actionState || room.actionState.actorId !== socket.id) return;
 
             if (challenge) { 
-                const blocker = room.players.find(p => p.id === room.actionState.blockerId);
-                const actor = room.players.find(p => p.id === room.actionState.actorId);
-                
-                const hasDuke = blocker.influence.some(c => c.alive && c.role === '공작');
-
-                if (hasDuke) {
-                    // ★ NEW 로직: 상대방(방해자)의 공작 카드를 찾아 중앙덱에 넣고 새로 뽑게 함
-                    const dukeCard = blocker.influence.find(c => c.alive && c.role === '공작');
-                    if (dukeCard) {
-                        room.deck.push('공작');
-                        room.deck.sort(() => Math.random() - 0.5);
-                        dukeCard.role = room.deck.pop();
-                    }
-
-                    // 나는 잃는 페널티 없이 원조 실패 문구만 출력
-                    coupIo.to(roomCode).emit('actionAnnounce', { actorName: actor.name, actionText: '원조에 실패했습니다.' });
-
-                    // 코인 획득 없이 바로 턴 종료
-                    room.actionState = null;
-                    nextTurnCoup(room);
-                } else {
-                    // 방해자가 거짓말이었을 경우 기존 로직 유지 (요청자 코인 +2, 방해자가 카드 잃음)
-                    actor.coins += 2;
-                    room.actionState.phase = 'LOSE_CARD';
-                    room.actionState.loserId = blocker.id;
-                }
+                // 방해자(Blocker)가 증명할 카드를 선택하는 단계로 진입
+                room.actionState.phase = 'REVEAL_CARD';
+                room.actionState.revealerId = room.actionState.blockerId;
             } else {
                 room.actionState = null;
                 nextTurnCoup(room);
@@ -774,7 +745,59 @@ coupIo.on('connection', (socket) => {
         } catch(e){}
     });
 
-    // 카드 버리기 (다이) 처리
+    // ★ 방해자가 카드를 선택했을 때 (애니메이션 및 결과 판정)
+    socket.on('revealCard', ({ roomCode, cardIndex }) => {
+        try {
+            const room = coupRooms[roomCode];
+            if (!room || !room.actionState || room.actionState.phase !== 'REVEAL_CARD' || room.actionState.revealerId !== socket.id) return;
+
+            const blocker = room.players.find(p => p.id === socket.id);
+            const actor = room.players.find(p => p.id === room.actionState.actorId);
+
+            const card = blocker.influence[cardIndex];
+            if (!card || !card.alive) return;
+
+            const isSuccess = (card.role === '공작'); // 방해를 공작으로 했으므로 공작이어야만 성공
+
+            // 1. 모든 플레이어에게 애니메이션 강제 재생 브로드캐스트
+            coupIo.to(roomCode).emit('blockRevealAnimation', {
+                revealerId: blocker.id,
+                cardIndex: cardIndex,
+                revealedRole: card.role,
+                isSuccess: isSuccess
+            });
+
+            // 2. 애니메이션(3초)이 끝나면 서버 로직 반영 후 턴 넘기기
+            setTimeout(() => {
+                if (isSuccess) {
+                    // 공작이 맞다면 -> 덱에 넣고 섞은 후 새 카드 부여 (요청자는 패널티 없음)
+                    room.deck.push('공작');
+                    room.deck.sort(() => Math.random() - 0.5);
+                    blocker.influence[cardIndex].role = room.deck.pop();
+
+                    coupIo.to(roomCode).emit('actionAnnounce', { actorName: actor.name, actionText: '원조에 실패했습니다.' });
+                } else {
+                    // 공작이 아니라면(거짓말) -> 방해자의 뒤집은 카드 즉시 사망, 요청자는 코인 획득
+                    blocker.influence[cardIndex].alive = false;
+                    if (!blocker.influence.some(c => c.alive)) blocker.isDead = true;
+                    actor.coins += 2;
+                }
+
+                const alivePlayers = room.players.filter(p => !p.isDead);
+                if (alivePlayers.length <= 1) {
+                    room.phase = 'GAME_OVER';
+                    room.winner = alivePlayers[0]?.name || '생존자 없음';
+                } else {
+                    room.actionState = null;
+                    nextTurnCoup(room);
+                }
+                
+                coupIo.to(roomCode).emit('roomUpdate', room);
+            }, 3000);
+        } catch(e){}
+    });
+
+    // 기존의 강제 카드 버리기 로직 (현 버전 원조에서는 쓰이지 않으나 다른 로직 확장을 위해 보존)
     socket.on('selectLoseCard', ({ roomCode, cardIndex }) => {
         try {
             const room = coupRooms[roomCode];
