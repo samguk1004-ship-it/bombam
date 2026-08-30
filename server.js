@@ -565,7 +565,7 @@ function nextTurnCoup(room, roomCode) {
             emitCoupUpdate(roomCode, currentRoom);
         } else {
             nextTurnCoup(currentRoom, roomCode);
-            emitCoupUpdate(roomCode, currentRoom);
+            emitCoupUpdate(currentRoom, roomCode);
         }
     });
 }
@@ -698,7 +698,6 @@ function processRevealCard(room, roomCode, revealerId, cardIndex) {
     if (!card || !card.alive) return;
 
     const actionType = room.actionState ? room.actionState.type : '';
-    const isCoup = actionType === 'COUP' || actionType === 'ASSASSIN_DEATH' || actionType === 'ASSASSIN_ATTACKER_DEATH';
     
     let isSuccess = false;
     if (actionType === 'ASSASSIN_BLOCK_CHALLENGE') {
@@ -779,7 +778,7 @@ function processRevealCard(room, roomCode, revealerId, cardIndex) {
             emitCoupUpdate(roomCode, currentRoom);
         } else {
             currentRoom.actionState = null;
-            nextTurnCoup(room, roomCode);
+            nextTurnCoup(currentRoom, roomCode);
         }
     }, 3000);
 }
