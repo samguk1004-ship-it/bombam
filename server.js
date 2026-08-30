@@ -63,7 +63,6 @@ pokerIo.on('connection', (socket) => {
     socket.on('disconnect', () => {});
 });
 
-
 // ==========================================
 // 🎯 [2] 플립 7 전용 (Namespace: /flip7)
 // ==========================================
@@ -90,7 +89,6 @@ flip7Io.on('connection', (socket) => {
     socket.on('leaveRoom', (roomCode) => {});
     socket.on('disconnect', () => {});
 });
-
 
 // ==========================================
 // 🗡️ [3] 쿠 전용 (Namespace: /coup)
@@ -402,12 +400,8 @@ function processRevealCard(room, roomCode, revealerId, cardIndex) {
         isSuccess = (card.role === '공작');
     }
 
-    // 🛑 귀부인 도전 실패인 경우, 첫 번째 카드 애니메이션을 독립적으로 처리하고 패배로 버릴 카드 안내 문구 적용
     if (actionType === 'ASSASSIN_BLOCK_CHALLENGE' && !isSuccess) {
-        // 첫 번째 카드 사망 처리
         card.alive = false;
-
-        // 첫 번째 카드 뒤집기 애니메이션 전송
         coupIo.to(roomCode).emit('blockRevealAnimation', {
             revealerId: revealer.id,
             cardIndex: cardIndex,
@@ -415,11 +409,9 @@ function processRevealCard(room, roomCode, revealerId, cardIndex) {
             isSuccess: false
         });
 
-        // 안내 문구 변경 적용
         coupIo.to(roomCode).emit('actionAnnounce', { actorName: actorName, actionText: '패배로 버릴 카드를 선택하세요.' });
         emitCoupUpdate(roomCode, room);
 
-        // 1.5초 후 첫 번째 카드 안착 완료 가정 및 두 번째 카드 연속 처형 진행
         setTimeout(() => {
             const currentRoom = coupRooms[roomCode];
             if (!currentRoom) return;
@@ -432,7 +424,6 @@ function processRevealCard(room, roomCode, revealerId, cardIndex) {
                 secondCard.alive = false;
                 currentRevealer.isDead = true;
 
-                // 두 번째 카드 뒤집기 애니메이션 전송
                 coupIo.to(roomCode).emit('blockRevealAnimation', {
                     revealerId: currentRevealer.id,
                     cardIndex: secondCardIdx,
@@ -443,7 +434,6 @@ function processRevealCard(room, roomCode, revealerId, cardIndex) {
                 coupIo.to(roomCode).emit('actionAnnounce', { actorName: actorName, actionText: '패배로 버릴 카드를 선택하세요.' });
                 emitCoupUpdate(roomCode, currentRoom);
 
-                // 최종 안착 후 다음 턴 또는 게임 오버 처리
                 setTimeout(() => {
                     const finalRoom = coupRooms[roomCode];
                     if (!finalRoom) return;
@@ -636,9 +626,9 @@ function processRevealCard(room, roomCode, revealerId, cardIndex) {
     }, 3000);
 }
 
-
 coupIo.on('connection', (socket) => {
     socket.on('pingHeartbeat', () => { socket.emit('pongHeartbeat'); });
+    
     socket.on('joinRoom', ({ roomCode, userName, userId, isBot }) => {
         try {
             socket.join(roomCode);
@@ -673,12 +663,34 @@ coupIo.on('connection', (socket) => {
                     coins: 2, influence: [], isDead: false, connected: true
                 });
             } else {
+                // 🌟 [핵심 버그 수정 영역]: 기존 소켓 ID 백업 후, 게임 전체의 타겟 및 턴 ID를 새 소켓 ID로 싹 교체
+                const oldId = existingPlayer.id;
+
                 existingPlayer.id = socket.id;
                 existingPlayer.connected = true;
                 existingPlayer.isReconnecting = false;
                 
                 if (room.spectators) {
                     room.spectators = room.spectators.filter(s => s.userId !== userId);
+                }
+
+                // 방에 저장된 낡은 소켓 ID들을 새로운 소켓 ID로 모두 업데이트!
+                if (room.turnId === oldId) room.turnId = socket.id;
+                
+                if (room.actionState) {
+                    if (room.actionState.actorId === oldId) room.actionState.actorId = socket.id;
+                    if (room.actionState.targetId === oldId) room.actionState.targetId = socket.id;
+                    if (room.actionState.currentPromptId === oldId) room.actionState.currentPromptId = socket.id;
+                    if (room.actionState.revealerId === oldId) room.actionState.revealerId = socket.id;
+                    if (room.actionState.blockerId === oldId) room.actionState.blockerId = socket.id;
+                    
+                    if (room.actionState.askedList) {
+                        room.actionState.askedList = room.actionState.askedList.map(id => id === oldId ? socket.id : id);
+                    }
+                }
+
+                if (room.tempAmbassadorCards && room.tempAmbassadorCards.playerId === oldId) {
+                    room.tempAmbassadorCards.playerId = socket.id;
                 }
             }
             emitCoupUpdate(roomCode, room);
