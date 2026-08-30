@@ -97,7 +97,7 @@ flip7Io.on('connection', (socket) => {
 // ==========================================
 const coupIo = io.of('/coup');
 const coupRooms = {};
-const coupDisconnectTimers = {}; // 1분 이내 재접속 유예 타이머 맵
+const coupDisconnectTimers = {}; 
 
 function emitCoupUpdate(roomCode, room) {
     const safeRoom = {
@@ -331,6 +331,11 @@ function processChallengeResponse(room, roomCode, playerId, challenge) {
         room.actionState.phase = 'REVEAL_CARD';
         room.actionState.revealerId = room.actionState.blockerId;
         
+        // 해외 원조에 대한 공작 방어 도전일 경우 구분을 위해 actionState 타입 조정
+        if (room.actionState.type === 'FOREIGN_AID') {
+            room.actionState.type = 'FOREIGN_AID_BLOCK_CHALLENGE';
+        }
+
         emitCoupUpdate(roomCode, room);
         startCoupTimer(room, roomCode, 30, () => {
             const currentRoom = coupRooms[roomCode];
@@ -342,7 +347,9 @@ function processChallengeResponse(room, roomCode, playerId, challenge) {
             }
         });
     } else {
-        if (room.actionState.type === 'CAPTAIN') {
+        if (room.actionState.type === 'FOREIGN_AID') {
+            coupIo.to(roomCode).emit('actionAnnounce', { actorName: actorName, actionText: '해외 원조가 공작에 의해 방해되었습니다. (해외 원조 실패)' });
+        } else if (room.actionState.type === 'CAPTAIN') {
             coupIo.to(roomCode).emit('actionAnnounce', { actorName: actorName, actionText: '강탈에 실패하였습니다.' });
         } else {
             coupIo.to(roomCode).emit('actionAnnounce', { actorName: actorName, actionText: '행동에 실패하였습니다.' });
@@ -369,7 +376,7 @@ function processRevealCard(room, roomCode, revealerId, cardIndex) {
         isSuccess = (card.role === '귀부인');
     } else if (actionType === 'CAPTAIN_BLOCK_CHALLENGE' || actionType === 'CAPTAIN') {
         isSuccess = (card.role === '사령관' || card.role === '외교관');
-    } else if (actionType === 'DUKE' || actionType === 'FOREIGN_AID') {
+    } else if (actionType === 'DUKE' || actionType === 'FOREIGN_AID' || actionType === 'FOREIGN_AID_BLOCK_CHALLENGE') {
         isSuccess = (card.role === '공작');
     }
 
@@ -405,6 +412,30 @@ function processRevealCard(room, roomCode, revealerId, cardIndex) {
                 nextTurnCoup(currentRoom, roomCode);
                 emitCoupUpdate(currentRoom, currentRoom);
                 return;
+            }
+        } else if (curActionType === 'FOREIGN_AID_BLOCK_CHALLENGE') {
+            if (isSuccess) {
+                // 공작 카드가 맞아서 방어 성공 -> 덱에 넣고 카드 교체 후 해외 원조 실패 안내 문구 출력
+                const matchedRole = currentCard.role;
+                currentRoom.deck.push(matchedRole);
+                currentRoom.deck.sort(() => Math.random() - 0.5);
+                currentCard.role = currentRoom.deck.pop();
+                
+                coupIo.to(roomCode).emit('actionAnnounce', { actorName: curActorName, actionText: '해외 원조를 실패했습니다.' });
+                
+                currentRoom.actionState = null;
+                nextTurnCoup(currentRoom, currentRoom);
+                emitCoupUpdate(currentRoom, currentRoom);
+                return;
+            } else {
+                // 도전 실패로 방어자 카드 사망
+                currentCard.alive = false;
+                if (!currentRevealer.influence.some(c => c.alive)) currentRevealer.isDead = true;
+                
+                coupIo.to(roomCode).emit('actionAnnounce', { actorName: curActorName, actionText: '도전 실패! 해외 원조 방어에 실패하여 정상 지급됩니다.' });
+                if (currentActor && !currentActor.isDead) {
+                    currentActor.coins += 2;
+                }
             }
         } else if (curActionType === 'ASSASSIN_BLOCK_CHALLENGE' || curActionType === 'CAPTAIN_BLOCK_CHALLENGE' || curActionType === 'CAPTAIN') {
             if (isSuccess) {
@@ -464,11 +495,9 @@ coupIo.on('connection', (socket) => {
                 delete coupDisconnectTimers[disconnectKey];
             }
 
-            // userId 또는 닉네임이 일치하는 기존 플레이어 검색 (재접속 판정)
             let existingPlayer = room.players.find(p => (userId && p.userId === userId) || p.name === userName);
             
             if (!existingPlayer) {
-                // 이미 게임이 시작된 방에 아예 새로운 유저가 접속한 경우 -> 관전자 처리
                 if (room.phase === 'GAME') {
                     if (!room.spectators) room.spectators = [];
                     let existingSpec = room.spectators.find(s => (userId && s.userId === userId) || s.name === userName);
@@ -481,13 +510,11 @@ coupIo.on('connection', (socket) => {
                     return;
                 }
 
-                // 대기실(LOBBY)인 경우 새 플레이어로 정상 참여
                 room.players.push({
                     id: socket.id, name: userName, userId, isBot, ready: room.players.length === 0,
                     coins: 2, influence: [], isDead: false, connected: true
                 });
             } else {
-                // 기존 플레이어가 1분 이내에 재접속한 경우 -> 소켓 ID 갱신 및 기존 게임 상태(코인, 카드 등) 그대로 복구!
                 existingPlayer.id = socket.id;
                 existingPlayer.connected = true;
                 existingPlayer.isReconnecting = false;
@@ -727,7 +754,6 @@ coupIo.on('connection', (socket) => {
         } catch(e){}
     });
 
-    // ⏱️ [튕김 및 재접속 관리] 연결 해제 시 1분 동안 세션을 보존하며, 1분 내 재접속하지 않으면 방에서 완전히 퇴장 처리
     socket.on('disconnect', () => {
         try {
             for (let roomCode in coupRooms) {
@@ -753,7 +779,6 @@ coupIo.on('connection', (socket) => {
                             emitCoupUpdate(roomCode, room);
                         }
                     } else {
-                        // 1분(60초) 유예 타이머 설정
                         coupDisconnectTimers[disconnectKey] = setTimeout(() => {
                             delete coupDisconnectTimers[disconnectKey];
                             const currentRoom = coupRooms[roomCode];
@@ -769,9 +794,9 @@ coupIo.on('connection', (socket) => {
                                 } else if (currentRoom.actionState && currentRoom.actionState.currentPromptId === player.id) {
                                     processBlockResponse(currentRoom, roomCode, player.id, false);
                                 }
-                                emitCoupUpdate(roomCode, currentRoom);
+                                emitCoupUpdate(currentRoom, currentRoom);
                             }
-                        }, 60000); // 1분
+                        }, 60000);
                     }
                 }
             }
