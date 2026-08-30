@@ -634,6 +634,10 @@ coupIo.on('connection', (socket) => {
             const room = coupRooms[roomCode];
             if (!room || room.players.length === 0) return;
             
+            // ★ 서버에서도 방장을 제외한 모든 인원이 준비되었는지 추가 검증
+            const allReady = room.players.length === 1 || room.players.slice(1).every(p => p.ready);
+            if (!allReady) return; 
+            
             room.phase = 'GAME';
             room.actionState = null;
             room.deck = createCoupDeck(room.players.length);
@@ -727,18 +731,15 @@ coupIo.on('connection', (socket) => {
         } catch(e){}
     });
 
-    // ★ Challenge 발생 시 확인 여부에 따른 동작 수정
     socket.on('challengeResponse', ({ roomCode, challenge }) => {
         try {
             const room = coupRooms[roomCode];
             if (!room || !room.actionState || room.actionState.actorId !== socket.id) return;
 
             if (challenge) { 
-                // 방해자(Blocker)가 증명할 카드를 선택하는 단계로 진입
                 room.actionState.phase = 'REVEAL_CARD';
                 room.actionState.revealerId = room.actionState.blockerId;
             } else {
-                // ★ 아니오(확인 안 함)를 누를 경우 패널티 및 문구 출력
                 const actor = room.players.find(p => p.id === room.actionState.actorId);
                 coupIo.to(roomCode).emit('actionAnnounce', { actorName: actor.name, actionText: '원조에 실패했습니다.' });
                 
@@ -749,7 +750,6 @@ coupIo.on('connection', (socket) => {
         } catch(e){}
     });
 
-    // 방해자가 카드를 선택했을 때 (애니메이션 및 결과 판정)
     socket.on('revealCard', ({ roomCode, cardIndex }) => {
         try {
             const room = coupRooms[roomCode];
@@ -761,9 +761,8 @@ coupIo.on('connection', (socket) => {
             const card = blocker.influence[cardIndex];
             if (!card || !card.alive) return;
 
-            const isSuccess = (card.role === '공작'); // 방해를 공작으로 했으므로 공작이어야만 성공
+            const isSuccess = (card.role === '공작'); 
 
-            // 1. 모든 플레이어에게 애니메이션 강제 재생 브로드캐스트
             coupIo.to(roomCode).emit('blockRevealAnimation', {
                 revealerId: blocker.id,
                 cardIndex: cardIndex,
@@ -771,17 +770,14 @@ coupIo.on('connection', (socket) => {
                 isSuccess: isSuccess
             });
 
-            // 2. 애니메이션(3초)이 끝나면 서버 로직 반영 후 턴 넘기기
             setTimeout(() => {
                 if (isSuccess) {
-                    // 공작이 맞다면 -> 덱에 넣고 섞은 후 새 카드 부여 (요청자는 패널티 없음)
                     room.deck.push('공작');
                     room.deck.sort(() => Math.random() - 0.5);
                     blocker.influence[cardIndex].role = room.deck.pop();
 
                     coupIo.to(roomCode).emit('actionAnnounce', { actorName: actor.name, actionText: '원조에 실패했습니다.' });
                 } else {
-                    // 공작이 아니라면(거짓말) -> 방해자의 뒤집은 카드 즉시 사망, 요청자는 코인 획득
                     blocker.influence[cardIndex].alive = false;
                     if (!blocker.influence.some(c => c.alive)) blocker.isDead = true;
                     actor.coins += 2;
