@@ -482,14 +482,15 @@ function processRevealCard(room, roomCode, revealerId, cardIndex) {
                     return;
                 }
             } else {
-                // 🛑 귀부인 방어 실패 시: 1번 카드 먼저 뒤집혀 죽는 연출(다이) 후, 시간차를 두고 2번 카드도 뒤집혀 최종 사망(다이)하도록 처리
+                // 🛑 1단계: 첫 번째 카드 사망 처리 및 안착 유도를 위한 중간 패킷 송신
                 currentCard.alive = false;
                 
-                coupIo.to(roomCode).emit('actionAnnounce', { actorName: curActorName, actionText: '경호 실패! 거짓 발언으로 첫 번째 카드가 다이합니다.' });
+                coupIo.to(roomCode).emit('actionAnnounce', { actorName: curActorName, actionText: '경호 실패! 첫 번째 카드가 뒤집혀 다이합니다.' });
                 
+                // 첫 번째 카드가 완전히 안착(정지)할 수 있도록 상태를 먼저 동기화
                 emitCoupUpdate(currentRoom, currentRoom);
 
-                // 2초 뒤 시간차를 두고 두 번째 카드도 뒤집히며 완전히 사망 처리
+                // 🛑 2단계: 첫 번째 카드가 안착한 뒤 충분한 시간(1.5초)을 두고 두 번째 카드 오픈 연출 시작
                 setTimeout(() => {
                     const latestRoom = coupRooms[roomCode];
                     if (!latestRoom) return;
@@ -501,6 +502,7 @@ function processRevealCard(room, roomCode, revealerId, cardIndex) {
                         const secondCard = latestRevealer.influence[secondCardIdx];
                         secondCard.alive = false;
 
+                        // 두 번째 카드 뒤집기 애니메이션 트리거
                         coupIo.to(roomCode).emit('blockRevealAnimation', {
                             revealerId: latestRevealer.id,
                             cardIndex: secondCardIdx,
@@ -508,8 +510,9 @@ function processRevealCard(room, roomCode, revealerId, cardIndex) {
                             isSuccess: false
                         });
 
-                        coupIo.to(roomCode).emit('actionAnnounce', { actorName: curActorName, actionText: '남은 두 번째 카드마저 뒤집히며 최종 사망(다이)합니다.' });
+                        coupIo.to(roomCode).emit('actionAnnounce', { actorName: curActorName, actionText: '나머지 두 번째 카드마저 뒤집히며 최종 사망(다이)합니다.' });
 
+                        // 🛑 3단계: 두 번째 카드 애니메이션이 끝난 후 최종 사망 확정 및 다음 턴 진행
                         setTimeout(() => {
                             const finalRoom = coupRooms[roomCode];
                             if (!finalRoom) return;
@@ -531,7 +534,7 @@ function processRevealCard(room, roomCode, revealerId, cardIndex) {
                             }
                         }, 3000);
                     }
-                }, 2500);
+                }, 1500);
                 return;
             }
         } else if (curActionType === 'FOREIGN_AID_BLOCK_CHALLENGE') {
