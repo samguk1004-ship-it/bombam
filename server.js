@@ -602,27 +602,25 @@ function nextTurnCoup(room, roomCode) {
     } while (room.players[room.turnIndex].isDead);
     room.turnId = room.players[room.turnIndex].id;
 
+    // 턴당 60초 제한 시간 연동 (시간 초과 시 자동으로 소득(+1) 챙기고 다음 턴으로 정상 진행)
     startCoupTimer(room, roomCode, 60, () => {
-        const actor = room.players.find(p => p.id === room.turnId);
-        if (!actor || actor.isDead) return nextTurnCoup(room, roomCode);
+        const currentRoom = coupRooms[roomCode];
+        if (!currentRoom || currentRoom.phase !== 'GAME') return;
         
-        if (actor.coins >= 7) {
-            const targets = room.players.filter(p => !p.isDead && p.id !== actor.id);
-            const target = targets[Math.floor(Math.random() * targets.length)];
-            actor.coins -= 7;
-            if (target) killCoupInfluence(target);
-        } else {
+        const actor = currentRoom.players.find(p => p.id === currentRoom.turnId);
+        if (actor && !actor.isDead) {
             actor.coins += 1;
+            coupIo.to(roomCode).emit('actionAnnounce', { actorName: actor.name, actionText: '시간 초과로 소득(+1) 처리되었습니다.' });
         }
 
-        const alive = room.players.filter(p => !p.isDead);
+        const alive = currentRoom.players.filter(p => !p.isDead);
         if (alive.length <= 1) {
-            room.phase = 'GAME_OVER';
-            room.winner = alive[0]?.name || '생존자 없음';
-            emitCoupUpdate(roomCode, room);
+            currentRoom.phase = 'GAME_OVER';
+            currentRoom.winner = alive[0]?.name || '생존자 없음';
+            emitCoupUpdate(roomCode, currentRoom);
         } else {
-            nextTurnCoup(room, roomCode);
-            emitCoupUpdate(roomCode, room);
+            nextTurnCoup(currentRoom, roomCode);
+            emitCoupUpdate(roomCode, currentRoom);
         }
     });
 }
@@ -643,6 +641,7 @@ function setNextBlocker(room, roomCode) {
     }
 
     if (found) {
+        // 블록 질문 선택 시 30초 제한 시간 연동
         startCoupTimer(room, roomCode, 30, () => processBlockResponse(room, roomCode, room.actionState.currentPromptId, false));
     } else {
         clearCoupTimer(room);
@@ -665,6 +664,7 @@ function processBlockResponse(room, roomCode, playerId, block) {
         room.actionState.blockerId = playerId;
         room.actionState.phase = 'WAIT_CHALLENGE';
         
+        // 챌린지 질문 선택 시 30초 제한 시간 연동
         startCoupTimer(room, roomCode, 30, () => processChallengeResponse(room, roomCode, room.actionState.actorId, false));
     } else { 
         room.actionState.askedList.push(playerId);
@@ -680,6 +680,7 @@ function processChallengeResponse(room, roomCode, playerId, challenge) {
         room.actionState.phase = 'REVEAL_CARD';
         room.actionState.revealerId = (room.actionState.type === 'DUKE') ? room.actionState.actorId : room.actionState.blockerId;
         
+        // 카드 공개 질문 선택 시 30초 제한 시간 연동
         startCoupTimer(room, roomCode, 30, () => {
             const revealer = room.players.find(p => p.id === room.actionState.revealerId);
             if (revealer) {
@@ -688,11 +689,9 @@ function processChallengeResponse(room, roomCode, playerId, challenge) {
             }
         });
     } else {
-        // ★ challenge가 false (카드를 확인하지 않음 / '아니오' 선택 시)
         const actor = room.players.find(p => p.id === playerId);
         if(actor) {
             if (room.actionState.type === 'DUKE') {
-                // 징세 방해에 대해 도전하지 않음 -> 징세 실패 안내만 알리고, 카드 손상 없음! 다음 차례로 진행
                 coupIo.to(roomCode).emit('actionAnnounce', { actorName: actor.name, actionText: '징세를 실패했습니다.' });
             } else {
                 coupIo.to(roomCode).emit('actionAnnounce', { actorName: actor.name, actionText: '원조에 실패했습니다.' });
