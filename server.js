@@ -668,16 +668,22 @@ coupIo.on('connection', (socket) => {
 
             if (socket.id !== room.turnId || actor.isDead || room.actionState) return;
 
+            // 원조 시: 문구를 먼저 브로드캐스트하고, 1.5초 딜레이 후에 질문창 띄우기
             if (action === 'FOREIGN_AID') {
-                // 원조 시 즉시 획득하지 않고 방해 팝업 진입
-                room.actionState = {
-                    type: 'FOREIGN_AID',
-                    actorId: actor.id,
-                    askedList: [],
-                    phase: 'WAIT_BLOCK'
-                };
-                setNextBlocker(room);
-                coupIo.to(roomCode).emit('roomUpdate', room);
+                coupIo.to(roomCode).emit('actionAnnounce', { actorName: actor.name, actionText: '원조를 사용했습니다.' });
+                
+                setTimeout(() => {
+                    const currentRoom = coupRooms[roomCode];
+                    if(!currentRoom) return;
+                    currentRoom.actionState = {
+                        type: 'FOREIGN_AID',
+                        actorId: actor.id,
+                        askedList: [],
+                        phase: 'WAIT_BLOCK'
+                    };
+                    setNextBlocker(currentRoom);
+                    coupIo.to(roomCode).emit('roomUpdate', currentRoom);
+                }, 1500);
                 return;
             }
 
