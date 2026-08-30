@@ -172,7 +172,7 @@ function nextTurnCoup(room, roomCode) {
             emitCoupUpdate(roomCode, currentRoom);
         } else {
             nextTurnCoup(currentRoom, roomCode);
-            emitCoupUpdate(currentRoom, currentRoom);
+            emitCoupUpdate(roomCode, currentRoom);
         }
     });
 }
@@ -402,7 +402,7 @@ function processRevealCard(room, roomCode, revealerId, cardIndex) {
         isSuccess = (card.role === '공작');
     }
 
-    // 🛑 귀부인 도전 실패인 경우, 첫 번째 카드 애니메이션을 독립적으로 처리하고 루프 방지
+    // 🛑 귀부인 도전 실패인 경우, 첫 번째 카드 애니메이션을 독립적으로 처리하고 패배로 버릴 카드 안내 문구 적용
     if (actionType === 'ASSASSIN_BLOCK_CHALLENGE' && !isSuccess) {
         // 첫 번째 카드 사망 처리
         card.alive = false;
@@ -415,7 +415,8 @@ function processRevealCard(room, roomCode, revealerId, cardIndex) {
             isSuccess: false
         });
 
-        coupIo.to(roomCode).emit('actionAnnounce', { actorName: actorName, actionText: '경호 실패! 첫 번째 카드가 뒤집혀 다이합니다.' });
+        // 안내 문구 변경 적용
+        coupIo.to(roomCode).emit('actionAnnounce', { actorName: actorName, actionText: '패배로 버릴 카드를 선택하세요.' });
         emitCoupUpdate(roomCode, room);
 
         // 1.5초 후 첫 번째 카드 안착 완료 가정 및 두 번째 카드 연속 처형 진행
@@ -439,7 +440,7 @@ function processRevealCard(room, roomCode, revealerId, cardIndex) {
                     isSuccess: false
                 });
 
-                coupIo.to(roomCode).emit('actionAnnounce', { actorName: actorName, actionText: '나머지 두 번째 카드마저 뒤집히며 최종 사망(다이)합니다.' });
+                coupIo.to(roomCode).emit('actionAnnounce', { actorName: actorName, actionText: '패배로 버릴 카드를 선택하세요.' });
                 emitCoupUpdate(roomCode, currentRoom);
 
                 // 최종 안착 후 다음 턴 또는 게임 오버 처리
@@ -630,7 +631,7 @@ function processRevealCard(room, roomCode, revealerId, cardIndex) {
         } else {
             currentRoom.actionState = null;
             nextTurnCoup(currentRoom, roomCode);
-            emitCoupUpdate(currentRoom, currentRoom);
+            emitCoupUpdate(roomCode, currentRoom);
         }
     }, 3000);
 }
