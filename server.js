@@ -595,6 +595,7 @@ function killCoupInfluence(target) {
 
 function nextTurnCoup(room, roomCode) {
     clearCoupTimer(room);
+    room.actionState = null; // ★ 무조건 상태 초기화 방어막 (플레이어 나감 등에 대비)
     
     do {
         room.turnIndex = (room.turnIndex + 1) % room.players.length;
@@ -688,10 +689,12 @@ function processChallengeResponse(room, roomCode, playerId, challenge) {
         });
     } else {
         const actor = room.players.find(p => p.id === playerId);
-        coupIo.to(roomCode).emit('actionAnnounce', { actorName: actor.name, actionText: room.actionState.type === 'DUKE' ? '징세를 실패했습니다.' : '원조에 실패했습니다.' });
-        
-        if (room.actionState.type === 'DUKE') {
-            killCoupInfluence(actor); 
+        if(actor) {
+            coupIo.to(roomCode).emit('actionAnnounce', { actorName: actor.name, actionText: room.actionState.type === 'DUKE' ? '징세를 실패했습니다.' : '원조에 실패했습니다.' });
+            
+            if (room.actionState.type === 'DUKE') {
+                killCoupInfluence(actor); 
+            }
         }
         
         room.actionState = null;
@@ -736,11 +739,11 @@ function processRevealCard(room, roomCode, revealerId, cardIndex) {
                 room.deck.push('공작');
                 room.deck.sort(() => Math.random() - 0.5);
                 revealer.influence[cardIndex].role = room.deck.pop();
-                coupIo.to(roomCode).emit('actionAnnounce', { actorName: actor.name, actionText: '원조에 실패했습니다.' });
+                if(actor) coupIo.to(roomCode).emit('actionAnnounce', { actorName: actor.name, actionText: '원조에 실패했습니다.' });
             } else {
                 revealer.influence[cardIndex].alive = false;
                 if (!revealer.influence.some(c => c.alive)) revealer.isDead = true;
-                actor.coins += 2;
+                if(actor) actor.coins += 2;
             }
         }
 
@@ -768,10 +771,8 @@ coupIo.on('connection', (socket) => {
             
             let existingPlayer = room.players.find(p => (userId && p.userId === userId) || p.name === userName);
             
-            // ★ 게임 중 난입 또는 재접속 시 로직
             if (room.phase !== 'LOBBY' && room.phase !== 'GAME_OVER') {
                 if (existingPlayer) {
-                    // ★ 버그 해결: 재접속 시 이전 소켓 ID를 현재 소켓 ID로 완벽히 교체
                     const oldId = existingPlayer.id;
                     existingPlayer.id = socket.id;
                     existingPlayer.connected = true;
@@ -788,14 +789,12 @@ coupIo.on('connection', (socket) => {
                         }
                     }
                 } else {
-                    // ★ 새로운 플레이어 난입 시 관전자 모드로 추가
                     if (!room.spectators) room.spectators = [];
                     if (!room.spectators.find(s => s.userId === userId)) {
                         room.spectators.push({ id: socket.id, userId, name: userName });
                     }
                 }
             } else {
-                // 대기실 접속
                 if (existingPlayer) {
                     existingPlayer.id = socket.id;
                     existingPlayer.connected = true;
@@ -830,7 +829,7 @@ coupIo.on('connection', (socket) => {
             
             room.phase = 'GAME';
             room.actionState = null;
-            room.spectators = []; // 게임 시작 시 관전자 초기화
+            room.spectators = []; 
             room.deck = createCoupDeck(room.players.length);
             
             room.players.forEach(p => {
@@ -862,6 +861,8 @@ coupIo.on('connection', (socket) => {
             clearCoupTimer(room);
 
             if (action === 'FOREIGN_AID') {
+                // ★ 즉시 상태를 'ANNOUNCING'으로 변경하여 중복/연타 클릭 완벽 방지
+                room.actionState = { phase: 'ANNOUNCING' }; 
                 coupIo.to(roomCode).emit('actionAnnounce', { actorName: actor.name, actionText: '원조를 사용했습니다.' });
                 
                 setTimeout(() => {
@@ -878,6 +879,7 @@ coupIo.on('connection', (socket) => {
                 }, 1500);
                 return;
             } else if (action === 'DUKE') {
+                room.actionState = { phase: 'ANNOUNCING' }; 
                 coupIo.to(roomCode).emit('actionAnnounce', { actorName: actor.name, actionText: '징세를 사용했습니다.' });
                 
                 setTimeout(() => {
@@ -924,7 +926,8 @@ coupIo.on('connection', (socket) => {
     socket.on('blockResponse', ({ roomCode, block }) => {
         try {
             const room = coupRooms[roomCode];
-            if (!room || !room.actionState || room.actionState.currentPromptId !== socket.id) return;
+            // ★ 상태 검증 로직 대폭 강화 (중복 답변 완전 차단)
+            if (!room || !room.actionState || room.actionState.phase !== 'WAIT_BLOCK' || room.actionState.currentPromptId !== socket.id) return;
             processBlockResponse(room, roomCode, socket.id, block);
         } catch(e){}
     });
@@ -932,7 +935,7 @@ coupIo.on('connection', (socket) => {
     socket.on('challengeResponse', ({ roomCode, challenge }) => {
         try {
             const room = coupRooms[roomCode];
-            if (!room || !room.actionState || room.actionState.actorId !== socket.id) return;
+            if (!room || !room.actionState || room.actionState.phase !== 'WAIT_CHALLENGE' || room.actionState.actorId !== socket.id) return;
             processChallengeResponse(room, roomCode, socket.id, challenge);
         } catch(e){}
     });
@@ -957,7 +960,6 @@ function leaveCoupRoom(socket, specificRoomCode) {
     checkRooms.forEach(roomCode => {
         const room = coupRooms[roomCode];
         if (room) {
-            // 관전자 삭제
             if (room.spectators) {
                 room.spectators = room.spectators.filter(s => s.id !== socket.id);
             }
