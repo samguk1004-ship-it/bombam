@@ -550,11 +550,17 @@ function leaveFlip7Room(socket, roomCode) {
 const coupIo = io.of('/coup');
 const coupRooms = {};
 
-// 쿠 기본 덱 생성 (각 3장씩 총 15장)
-const createCoupDeck = () => {
+// 쿠 인원수에 따른 덱 생성 (2~6인: 3장씩 총 15장 / 7~8인: 4장씩 총 20장)
+const createCoupDeck = (playerCount) => {
     const chars = ['공작', '자객', '사령관', '외교관', '귀부인'];
+    const copies = playerCount >= 7 ? 4 : 3;
     let deck = [];
-    chars.forEach(c => { deck.push(c, c, c); });
+    
+    chars.forEach(c => { 
+        for(let i=0; i<copies; i++) {
+            deck.push(c);
+        }
+    });
     return deck.sort(() => Math.random() - 0.5); // 카드 셔플
 };
 
@@ -594,14 +600,16 @@ coupIo.on('connection', (socket) => {
         } catch(e) {}
     });
 
-    // 3. 게임 시작 [수정: 랜덤 턴 부여]
+    // 3. 게임 시작 [수정: 랜덤 턴 부여 및 인원수에 따른 덱 배분]
     socket.on('startGame', (roomCode) => {
         try {
             const room = coupRooms[roomCode];
             if (!room || room.players.length === 0) return;
             
             room.phase = 'GAME';
-            room.deck = createCoupDeck();
+            
+            // 인원수에 맞춰 덱 생성 호출 (3장씩 or 4장씩)
+            room.deck = createCoupDeck(room.players.length);
             
             // 플레이어 초기화 (코인 2개, 카드 2장씩 배분)
             room.players.forEach(p => {
@@ -618,7 +626,7 @@ coupIo.on('connection', (socket) => {
             room.turnId = room.players[room.turnIndex].id;
             
             coupIo.to(roomCode).emit('gameStarted', room);
-            coupIo.to(roomCode).emit('roomUpdate', room); // 추가: 턴 업데이트 동기화
+            coupIo.to(roomCode).emit('roomUpdate', room); // 턴 업데이트 동기화
         } catch(e) {}
     });
 
