@@ -22,13 +22,14 @@ app.get('/', (req, res) => {
 
 const server = http.createServer(app);
 
-// 서버 연결 끊김 및 세션 튕김 현상 방지를 위한 소켓 타임아웃 및 핑 주기 연장 설정
+// [수정] 서버 연결 끊김 및 세션 튕김 현상 방지를 위한 소켓 타임아웃 및 핑 주기 연장 설정
 const io = new Server(server, {
     cors: { origin: "*", methods: ["GET", "POST", "OPTIONS"] },
     pingTimeout: 120000, 
     pingInterval: 25000,
     connectTimeout: 60000,
-    transports: ['polling', 'websocket'],
+    upgradeTimeout: 30000,
+    transports: ['websocket', 'polling'],
     allowEIO3: true
 });
 
@@ -81,6 +82,11 @@ function checkGameOver(currentRoom, roomCode) {
 }
 
 pokerIo.on('connection', (socket) => {
+    // [수정] 클라이언트 하트비트 수신 시 응답하여 연결 강제 유지
+    socket.on('pingHeartbeat', () => {
+        socket.emit('pongHeartbeat');
+    });
+
     socket.on('joinRoom', ({ roomCode, userName, userId, isBot }) => {
         try {
             socket.join(roomCode);
@@ -424,6 +430,11 @@ const flip7Io = io.of('/flip7');
 const flip7Rooms = {};
 
 flip7Io.on('connection', (socket) => {
+    // [수정] 클라이언트 하트비트 수신
+    socket.on('pingHeartbeat', () => {
+        socket.emit('pongHeartbeat');
+    });
+
     socket.on('joinRoom', ({ roomCode, userName, userId, isBot }) => {
         try {
             socket.join(roomCode);
@@ -763,6 +774,11 @@ function processRevealCard(room, roomCode, revealerId, cardIndex) {
 
 
 coupIo.on('connection', (socket) => {
+    // [수정] 클라이언트 하트비트 수신
+    socket.on('pingHeartbeat', () => {
+        socket.emit('pongHeartbeat');
+    });
+
     socket.on('joinRoom', ({ roomCode, userName, userId, isBot }) => {
         try {
             socket.join(roomCode);
