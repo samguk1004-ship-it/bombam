@@ -38,33 +38,6 @@ const io = new Server(server, {
 const pokerIo = io.of('/poker');
 const pokerRooms = {};
 
-function checkGameOver(currentRoom, roomCode) {
-    try {
-        if (!pokerRooms[roomCode]) return;
-        let isGameOver = false; let finalLoserId = null;
-        const penaltyLimit = currentRoom.players.length >= 7 ? 3 : 4;
-
-        currentRoom.players.forEach(p => {
-            if (p.hand.length === 0) { isGameOver = true; finalLoserId = p.id; }
-            const counts = {};
-            p.penalties.forEach(c => {
-                const baseId = c.id.replace('_king', '').replace(/_\d+$/, '');
-                counts[baseId] = (counts[baseId] || 0) + 1;
-                if (counts[baseId] >= penaltyLimit) { isGameOver = true; finalLoserId = p.id; }
-            });
-        });
-
-        if (isGameOver) {
-            currentRoom.phase = 'GAME_OVER'; currentRoom.loserId = finalLoserId;
-            pokerIo.to(roomCode).emit('roomUpdate', currentRoom);
-        } else {
-            currentRoom.phase = 'GAME'; currentRoom.turnId = currentRoom.revealData.penaltyId;
-            currentRoom.activeOffer = null; currentRoom.revealData = null;
-            pokerIo.to(roomCode).emit('roundResolved', currentRoom);
-        }
-    } catch(e) {}
-}
-
 pokerIo.on('connection', (socket) => {
     socket.on('pingHeartbeat', () => { socket.emit('pongHeartbeat'); });
     socket.on('joinRoom', ({ roomCode, userName, userId, isBot }) => {
@@ -194,7 +167,6 @@ function setNextBlocker(room, roomCode) {
     const targetId = room.actionState.targetId;
     const targetPlayer = room.players.find(p => p.id === targetId);
 
-    // 강탈(CAPTAIN) 또는 암살(ASSASSIN)인 경우 대상자(target)가 우선적으로 방해할 기회를 가짐
     if ((room.actionState.type === 'CAPTAIN' || room.actionState.type === 'ASSASSIN') && targetPlayer && !targetPlayer.isDead && !room.actionState.askedList.includes(targetPlayer.id)) {
         room.actionState.currentPromptId = targetPlayer.id;
         startCoupTimer(room, roomCode, 30, () => processBlockResponse(room, roomCode, targetPlayer.id, false));
@@ -202,7 +174,6 @@ function setNextBlocker(room, roomCode) {
         return;
     }
 
-    // 그 외 일반적인 순회 방어 처리
     const actorIdx = room.players.findIndex(p => p.id === room.actionState.actorId);
     let nextIdx = (actorIdx + 1) % room.players.length;
     
@@ -259,11 +230,9 @@ function processBlockResponse(room, roomCode, playerId, block, blockRole) {
         room.actionState.blockRole = blockRole || (room.actionState.type === 'ASSASSIN' ? '귀부인' : '사령관');
         
         if (room.actionState.type === 'ASSASSIN' || room.actionState.type === 'CAPTAIN') {
-            room.actionState.phase = 'REVEAL_CARD';
-            room.actionState.revealerId = playerId;
-            room.actionState.type = room.actionState.type === 'ASSASSIN' ? 'ASSASSIN_BLOCK_CHALLENGE' : 'CAPTAIN_BLOCK_CHALLENGE';
-
+            room.actionState.phase = 'WAIT_CHALLENGE';
             emitCoupUpdate(roomCode, room);
+            startCoupTimer(room, roomCode, 30, () => processChallengeResponse(room, roomCode, room.actionState.actorId, false));
             return;
         }
 
@@ -286,8 +255,9 @@ function processBlockResponse(room, roomCode, playerId, block, blockRole) {
                     return;
                 }
             } else {
-                const stealAmount = Math.min(2, target ? target.coins : 0);
-                if (target) target.coins -= stealAmount;
+                const targetP = room.players.find(p => p.id === room.actionState.targetId);
+                const stealAmount = Math.min(2, targetP ? targetP.coins : 0);
+                if (targetP) targetP.coins -= stealAmount;
                 actor.coins += stealAmount;
                 coupIo.to(roomCode).emit('actionAnnounce', { actorName: actor ? actor.name : '', actionText: `강탈에 성공하여 ${stealAmount}코인을 훔쳤습니다.` });
                 room.actionState = null;
@@ -340,7 +310,7 @@ function processRevealCard(room, roomCode, revealerId, cardIndex) {
     let isSuccess = false;
     if (actionType === 'ASSASSIN_BLOCK_CHALLENGE') {
         isSuccess = (card.role === '귀부인');
-    } else if (actionType === 'CAPTAIN_BLOCK_CHALLENGE') {
+    } else if (actionType === 'CAPTAIN_BLOCK_CHALLENGE' || actionType === 'CAPTAIN') {
         isSuccess = (card.role === '사령관' || card.role === '외교관');
     } else if (actionType === 'DUKE' || actionType === 'FOREIGN_AID') {
         isSuccess = (card.role === '공작');
@@ -377,7 +347,7 @@ function processRevealCard(room, roomCode, revealerId, cardIndex) {
                 emitCoupUpdate(currentRoom, currentRoom);
                 return;
             }
-        } else if (curActionType === 'ASSASSIN_BLOCK_CHALLENGE' || curActionType === 'CAPTAIN_BLOCK_CHALLENGE') {
+        } else if (curActionType === 'ASSASSIN_BLOCK_CHALLENGE' || curActionType === 'CAPTAIN_BLOCK_CHALLENGE' || curActionType === 'CAPTAIN') {
             const actor = currentRoom.players.find(p => p.id === currentRoom.actionState.actorId);
 
             if (isSuccess) {
@@ -388,28 +358,17 @@ function processRevealCard(room, roomCode, revealerId, cardIndex) {
                 
                 coupIo.to(roomCode).emit('actionAnnounce', { actorName: '', actionText: '강탈에 실패했습니다.' });
                 
-                if (curActionType === 'ASSASSIN_BLOCK_CHALLENGE') {
-                    setTimeout(() => {
-                        if (!currentRoom) return;
-                        currentRoom.actionState.phase = 'REVEAL_CARD';
-                        currentRoom.actionState.revealerId = currentRoom.actionState.actorId; 
-                        currentRoom.actionState.type = 'ASSASSIN_ATTACKER_DEATH';
-                        emitCoupUpdate(currentRoom, currentRoom);
-                    }, 2000);
-                    return;
-                } else {
-                    currentRoom.actionState = null;
-                    nextTurnCoup(currentRoom, currentRoom);
-                    emitCoupUpdate(currentRoom, currentRoom);
-                    return;
-                }
+                currentRoom.actionState = null;
+                nextTurnCoup(currentRoom, currentRoom);
+                emitCoupUpdate(currentRoom, currentRoom);
+                return;
             } else {
                 currentCard.alive = false;
                 if (!currentRevealer.influence.some(c => c.alive)) currentRevealer.isDead = true;
                 
                 coupIo.to(roomCode).emit('actionAnnounce', { actorName: actor ? actor.name : '', actionText: '강탈 방어 실패! 강탈에 성공했습니다.' });
                 
-                if (curActionType === 'CAPTAIN_BLOCK_CHALLENGE') {
+                if (curActionType === 'CAPTAIN_BLOCK_CHALLENGE' || curActionType === 'CAPTAIN') {
                     const target = currentRoom.players.find(p => p.id === currentRoom.actionState.targetId);
                     const stealAmount = Math.min(2, target ? target.coins : 0);
                     if (target) target.coins -= stealAmount;
@@ -521,7 +480,6 @@ coupIo.on('connection', (socket) => {
                 return;
             }
 
-            // 기타 액션 처리 생략 (기존과 동일)
             if (action === 'INCOME') actor.coins += 1;
             else if (action === 'FOREIGN_AID') {
                 room.actionState = { type: 'FOREIGN_AID', actorId: actor.id, askedList: [], phase: 'WAIT_BLOCK' };
@@ -575,11 +533,9 @@ coupIo.on('connection', (socket) => {
                 if (block) {
                     room.actionState.blockerId = socket.id;
                     room.actionState.blockRole = blockRole || (room.actionState.type === 'ASSASSIN' ? '귀부인' : '사령관');
-                    room.actionState.type = room.actionState.type === 'ASSASSIN' ? 'ASSASSIN_BLOCK_CHALLENGE' : 'CAPTAIN_BLOCK_CHALLENGE';
-                    room.actionState.phase = 'REVEAL_CARD';
-                    room.actionState.revealerId = socket.id;
-                    
+                    room.actionState.phase = 'WAIT_CHALLENGE';
                     emitCoupUpdate(roomCode, room);
+                    startCoupTimer(room, roomCode, 30, () => processChallengeResponse(room, roomCode, room.actionState.actorId, false));
                 } else {
                     room.actionState.askedList.push(socket.id);
                     coupIo.to(roomCode).emit('showOkEmote', socket.id);
