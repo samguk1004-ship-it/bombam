@@ -552,7 +552,7 @@ const coupRooms = {};
 
 // 쿠 기본 덱 생성 (각 3장씩 총 15장)
 const createCoupDeck = () => {
-    const chars = ['공작', '암살자', '사령관', '외교관', '귀부인'];
+    const chars = ['공작', '자객', '사령관', '외교관', '귀부인'];
     let deck = [];
     chars.forEach(c => { deck.push(c, c, c); });
     return deck.sort(() => Math.random() - 0.5); // 카드 셔플
@@ -594,7 +594,7 @@ coupIo.on('connection', (socket) => {
         } catch(e) {}
     });
 
-    // 3. 게임 시작
+    // 3. 게임 시작 [수정: 랜덤 턴 부여]
     socket.on('startGame', (roomCode) => {
         try {
             const room = coupRooms[roomCode];
@@ -602,7 +602,6 @@ coupIo.on('connection', (socket) => {
             
             room.phase = 'GAME';
             room.deck = createCoupDeck();
-            room.turnIndex = 0;
             
             // 플레이어 초기화 (코인 2개, 카드 2장씩 배분)
             room.players.forEach(p => {
@@ -614,8 +613,12 @@ coupIo.on('connection', (socket) => {
                 ];
             });
             
+            // [랜덤 시작 적용] 방장(0번 인덱스) 우선이 아닌 무작위 인덱스 추첨
+            room.turnIndex = Math.floor(Math.random() * room.players.length);
             room.turnId = room.players[room.turnIndex].id;
+            
             coupIo.to(roomCode).emit('gameStarted', room);
+            coupIo.to(roomCode).emit('roomUpdate', room); // 추가: 턴 업데이트 동기화
         } catch(e) {}
     });
 
@@ -665,6 +668,7 @@ coupIo.on('connection', (socket) => {
                 room.phase = 'GAME_OVER';
                 room.winner = alivePlayers[0].name;
             } else {
+                // [수정: 시계 방향 턴 진행] 배열의 끝에 도달하면 처음(0)으로 돌아감
                 do {
                     room.turnIndex = (room.turnIndex + 1) % room.players.length;
                 } while (room.players[room.turnIndex].isDead);
