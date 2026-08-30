@@ -655,7 +655,8 @@ function processRevealCard(room, roomCode, revealerId, cardIndex) {
     const card = revealer.influence[cardIndex];
     if (!card || !card.alive) return;
 
-    const isSuccess = (card.role === '공작'); 
+    const isCoup = room.actionState && room.actionState.type === 'COUP';
+    const isSuccess = isCoup ? false : (card.role === '공작'); 
 
     coupIo.to(roomCode).emit('blockRevealAnimation', {
         revealerId: revealer.id,
@@ -671,7 +672,10 @@ function processRevealCard(room, roomCode, revealerId, cardIndex) {
         if (!currentRevealer) return;
         const currentCard = currentRevealer.influence[cardIndex];
 
-        if (currentRoom.actionState && currentRoom.actionState.type === 'DUKE') {
+        if (currentRoom.actionState && currentRoom.actionState.type === 'COUP') {
+            currentCard.alive = false;
+            if (!currentRevealer.influence.some(c => c.alive)) currentRevealer.isDead = true;
+        } else if (currentRoom.actionState && currentRoom.actionState.type === 'DUKE') {
             const blocker = currentRoom.players.find(p => p.id === currentRoom.actionState.blockerId);
             if (isSuccess) {
                 currentRoom.deck.push('공작');
@@ -706,7 +710,7 @@ function processRevealCard(room, roomCode, revealerId, cardIndex) {
             emitCoupUpdate(roomCode, currentRoom);
         } else {
             currentRoom.actionState = null;
-            nextTurnCoup(currentRoom, roomCode);
+            nextTurnCoup(room, roomCode);
         }
     }, 3000);
 }
@@ -795,7 +799,6 @@ coupIo.on('connection', (socket) => {
                 ];
             });
             
-            // [수정] 최초 시작 시 방장이 아니라 무조건 랜덤한 플레이어가 선(턴)을 잡도록 설정
             room.turnIndex = Math.floor(Math.random() * room.players.length);
             room.turnId = room.players[room.turnIndex].id;
             
@@ -813,6 +816,10 @@ coupIo.on('connection', (socket) => {
             const target = room.players.find(p => p.id === targetId);
 
             if (socket.id !== room.turnId || actor.isDead || room.actionState) return;
+            
+            // [규칙 추가] 코인이 10개 이상일 때는 쿠(COUP) 이외의 행동을 엄격히 제한
+            if (actor.coins >= 10 && action !== 'COUP') return;
+
             clearCoupTimer(room);
 
             if (action === 'FOREIGN_AID') {
@@ -852,8 +859,28 @@ coupIo.on('connection', (socket) => {
             }
 
             if (action === 'INCOME') actor.coins += 1;
-            else if (action === 'COUP' && target) { actor.coins -= 7; killCoupInfluence(target); }
-            else if (action === 'ASSASSIN' && target) { actor.coins -= 3; killCoupInfluence(target); }
+            else if (action === 'COUP' && target) {
+                actor.coins -= 7;
+                room.actionState = {
+                    type: 'COUP',
+                    actorId: actor.id,
+                    revealerId: target.id,
+                    phase: 'REVEAL_CARD'
+                };
+                coupIo.to(roomCode).emit('actionAnnounce', { actorName: actor.name, actionText: `${target.name}님에게 쿠를 사용했습니다! 버릴 카드를 선택하세요.` });
+                
+                startCoupTimer(room, roomCode, 30, () => {
+                    const currentRoom = coupRooms[roomCode];
+                    if (!currentRoom || !currentRoom.actionState || currentRoom.actionState.phase !== 'REVEAL_CARD') return;
+                    const revealer = currentRoom.players.find(p => p.id === currentRoom.actionState.revealerId);
+                    if (revealer) {
+                        const idx = revealer.influence.findIndex(c => c.alive);
+                        if (idx !== -1) processRevealCard(currentRoom, roomCode, revealer.id, idx);
+                    }
+                });
+                emitCoupUpdate(roomCode, room);
+                return;
+            } else if (action === 'ASSASSIN' && target) { actor.coins -= 3; killCoupInfluence(target); }
             else if (action === 'CAPTAIN' && target) {
                 const stealAmount = Math.min(2, target.coins);
                 target.coins -= stealAmount;
