@@ -141,7 +141,7 @@ function nextTurnCoup(room, roomCode) {
     } while (room.players[room.turnIndex].isDead);
     room.turnId = room.players[room.turnIndex].id;
 
-    // 60초 타이머 시작 및 리셋
+    // 일반 턴 시작 시 60초 타이머 시작 및 리셋
     startCoupTimer(room, roomCode, 60, () => {
         const currentRoom = coupRooms[roomCode];
         if (!currentRoom || currentRoom.phase !== 'GAME') return;
@@ -170,7 +170,7 @@ function setNextBlocker(room, roomCode) {
 
     if ((room.actionState.type === 'CAPTAIN' || room.actionState.type === 'ASSASSIN') && targetPlayer && !targetPlayer.isDead && !room.actionState.askedList.includes(targetPlayer.id)) {
         room.actionState.currentPromptId = targetPlayer.id;
-        // 30초 선택 타이머 시작 및 리셋
+        // 선택창 진입 시 30초 타이머 시작 및 리셋
         startCoupTimer(room, roomCode, 30, () => {
             const curRoom = coupRooms[roomCode];
             if (!curRoom || !curRoom.actionState || curRoom.actionState.phase !== 'WAIT_BLOCK') return;
@@ -198,6 +198,7 @@ function setNextBlocker(room, roomCode) {
     }
 
     if (found) {
+        // 선택창 진입 시 30초 타이머 시작 및 리셋
         startCoupTimer(room, roomCode, 30, () => {
             const curRoom = coupRooms[roomCode];
             if (!curRoom || !curRoom.actionState || curRoom.actionState.phase !== 'WAIT_BLOCK') return;
@@ -247,7 +248,7 @@ function processBlockResponse(room, roomCode, playerId, block, blockRole) {
         
         room.actionState.phase = 'WAIT_CHALLENGE';
         emitCoupUpdate(roomCode, room);
-        // 도전 선택 창 30초 타이머 시작 및 리셋
+        // 도전 선택창 30초 타이머 시작 및 리셋
         startCoupTimer(room, roomCode, 30, () => {
             const curRoom = coupRooms[roomCode];
             if (!curRoom || !curRoom.actionState || curRoom.actionState.phase !== 'WAIT_CHALLENGE') return;
@@ -299,7 +300,7 @@ function processChallengeResponse(room, roomCode, playerId, challenge) {
         room.actionState.phase = 'REVEAL_CARD';
         room.actionState.revealerId = room.actionState.blockerId;
         
-        // 카드 선택 창 30초 타이머 시작 및 리셋
+        // 카드 선택창 30초 타이머 시작 및 리셋
         startCoupTimer(room, roomCode, 30, () => {
             const currentRoom = coupRooms[roomCode];
             if (!currentRoom || !currentRoom.actionState || currentRoom.actionState.phase !== 'REVEAL_CARD') return;
@@ -494,12 +495,12 @@ coupIo.on('connection', (socket) => {
 
             if (action === 'CAPTAIN' && target) {
                 room.actionState = { phase: 'ANNOUNCING' };
-                coupIo.to(roomCode).emit('actionAnnounce', { actorName: actor.name, actionText: `${target.name}님을 강탈합니다.` });
+                coupIo.to(roomCode).emit('actionAnnounce', { actorName: actor.name, actionText: `${actor.name}님이 ${target.name}님을 강탈합니다.` });
                 setTimeout(() => {
                     const currentRoom = coupRooms[roomCode];
                     if (!currentRoom) return;
                     currentRoom.actionState = { type: 'CAPTAIN', actorId: actor.id, targetId: target.id, askedList: [], phase: 'WAIT_BLOCK' };
-                    setNextBlocker(currentRoom, roomCode);
+                    setNextBlocker(currentRoom, currentRoom);
                     emitCoupUpdate(currentRoom, currentRoom);
                 }, 1500);
                 return;
@@ -571,7 +572,7 @@ coupIo.on('connection', (socket) => {
                     room.actionState.blockRole = blockRole || (room.actionState.type === 'ASSASSIN' ? '귀부인' : '사령관');
                     room.actionState.phase = 'WAIT_CHALLENGE';
                     emitCoupUpdate(roomCode, room);
-                    // 도전 30초 타이머 시작 및 리셋
+                    // 도전 선택창 30초 타이머 시작 및 리셋
                     startCoupTimer(room, roomCode, 30, () => {
                         const curRoom = coupRooms[roomCode];
                         if (!curRoom || !curRoom.actionState || curRoom.actionState.phase !== 'WAIT_CHALLENGE') return;
