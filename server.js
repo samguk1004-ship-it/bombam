@@ -402,6 +402,68 @@ function processRevealCard(room, roomCode, revealerId, cardIndex) {
         isSuccess = (card.role === '공작');
     }
 
+    // 🛑 귀부인 도전 실패인 경우, 첫 번째 카드 애니메이션을 독립적으로 처리하고 루프 방지
+    if (actionType === 'ASSASSIN_BLOCK_CHALLENGE' && !isSuccess) {
+        // 첫 번째 카드 사망 처리
+        card.alive = false;
+
+        // 첫 번째 카드 뒤집기 애니메이션 전송
+        coupIo.to(roomCode).emit('blockRevealAnimation', {
+            revealerId: revealer.id,
+            cardIndex: cardIndex,
+            revealedRole: card.role,
+            isSuccess: false
+        });
+
+        coupIo.to(roomCode).emit('actionAnnounce', { actorName: actorName, actionText: '경호 실패! 첫 번째 카드가 뒤집혀 다이합니다.' });
+        emitCoupUpdate(roomCode, room);
+
+        // 1.5초 후 첫 번째 카드 안착 완료 가정 및 두 번째 카드 연속 처형 진행
+        setTimeout(() => {
+            const currentRoom = coupRooms[roomCode];
+            if (!currentRoom) return;
+            const currentRevealer = currentRoom.players.find(p => p.id === revealerId);
+            if (!currentRevealer) return;
+
+            const secondCardIdx = currentRevealer.influence.findIndex(c => c.alive);
+            if (secondCardIdx !== -1) {
+                const secondCard = currentRevealer.influence[secondCardIdx];
+                secondCard.alive = false;
+                currentRevealer.isDead = true;
+
+                // 두 번째 카드 뒤집기 애니메이션 전송
+                coupIo.to(roomCode).emit('blockRevealAnimation', {
+                    revealerId: currentRevealer.id,
+                    cardIndex: secondCardIdx,
+                    revealedRole: secondCard.role,
+                    isSuccess: false
+                });
+
+                coupIo.to(roomCode).emit('actionAnnounce', { actorName: actorName, actionText: '나머지 두 번째 카드마저 뒤집히며 최종 사망(다이)합니다.' });
+                emitCoupUpdate(roomCode, currentRoom);
+
+                // 최종 안착 후 다음 턴 또는 게임 오버 처리
+                setTimeout(() => {
+                    const finalRoom = coupRooms[roomCode];
+                    if (!finalRoom) return;
+
+                    const alivePlayers = finalRoom.players.filter(p => !p.isDead);
+                    if (alivePlayers.length <= 1) {
+                        finalRoom.phase = 'GAME_OVER';
+                        finalRoom.winner = alivePlayers[0]?.name || '생존자 없음';
+                        finalRoom.actionState = null;
+                        emitCoupUpdate(roomCode, finalRoom);
+                    } else {
+                        finalRoom.actionState = null;
+                        nextTurnCoup(finalRoom, roomCode);
+                        emitCoupUpdate(roomCode, finalRoom);
+                    }
+                }, 3000);
+            }
+        }, 1500);
+        return;
+    }
+
     coupIo.to(roomCode).emit('blockRevealAnimation', {
         revealerId: revealer.id,
         cardIndex: cardIndex,
@@ -446,93 +508,6 @@ function processRevealCard(room, roomCode, revealerId, cardIndex) {
                 currentRoom.actionState = null;
                 nextTurnCoup(currentRoom, roomCode);
                 emitCoupUpdate(currentRoom, currentRoom);
-                return;
-            }
-        } else if (curActionType === 'ASSASSIN_BLOCK_CHALLENGE') {
-            if (isSuccess) {
-                const matchedRole = currentCard.role;
-                currentRoom.deck.push(matchedRole);
-                currentRoom.deck.sort(() => Math.random() - 0.5);
-                currentCard.role = currentRoom.deck.pop();
-
-                coupIo.to(roomCode).emit('actionAnnounce', { actorName: curActorName, actionText: '경호(귀부인) 성공! 암살 시도자에게 패배 벌칙이 부여됩니다.' });
-
-                if (currentActor && !currentActor.isDead) {
-                    currentRoom.actionState = {
-                        ...currentRoom.actionState,
-                        phase: 'REVEAL_CARD',
-                        revealerId: currentActor.id,
-                        type: 'ASSASSIN_ATTACKER_DEATH'
-                    };
-                    emitCoupUpdate(currentRoom, currentRoom);
-                    startCoupTimer(currentRoom, roomCode, 30, () => {
-                        const curR = coupRooms[roomCode];
-                        if (!curR || !curR.actionState || !curR.actionState.phase || curR.actionState.phase !== 'REVEAL_CARD') return;
-                        const rev = curR.players.find(p => p.id === curR.actionState.revealerId);
-                        if (rev) {
-                            const idx = rev.influence.findIndex(c => c.alive);
-                            if (idx !== -1) processRevealCard(curR, roomCode, rev.id, idx);
-                        }
-                    });
-                    return;
-                } else {
-                    currentRoom.actionState = null;
-                    nextTurnCoup(currentRoom, roomCode);
-                    emitCoupUpdate(currentRoom, currentRoom);
-                    return;
-                }
-            } else {
-                // 🛑 1단계: 첫 번째 카드 사망 처리 후 즉시 상태 동기화 전송 (통통 튀는 버그 방지)
-                currentCard.alive = false;
-                
-                coupIo.to(roomCode).emit('actionAnnounce', { actorName: curActorName, actionText: '경호 실패! 첫 번째 카드가 뒤집혀 다이합니다.' });
-                
-                emitCoupUpdate(currentRoom, currentRoom);
-
-                // 🛑 2단계: 1.5초 대기 후 두 번째 카드 뒤집기 연출 시작
-                setTimeout(() => {
-                    const latestRoom = coupRooms[roomCode];
-                    if (!latestRoom) return;
-                    const latestRevealer = latestRoom.players.find(p => p.id === revealerId);
-                    if (!latestRevealer) return;
-
-                    const secondCardIdx = latestRevealer.influence.findIndex(c => c.alive);
-                    if (secondCardIdx !== -1) {
-                        const secondCard = latestRevealer.influence[secondCardIdx];
-                        secondCard.alive = false;
-
-                        coupIo.to(roomCode).emit('blockRevealAnimation', {
-                            revealerId: latestRevealer.id,
-                            cardIndex: secondCardIdx,
-                            revealedRole: secondCard.role,
-                            isSuccess: false
-                        });
-
-                        coupIo.to(roomCode).emit('actionAnnounce', { actorName: curActorName, actionText: '나머지 두 번째 카드마저 뒤집히며 최종 사망(다이)합니다.' });
-
-                        // 🛑 3단계: 두 번째 카드 안착 후 최종 사망 확정 및 다음 턴 진행
-                        setTimeout(() => {
-                            const finalRoom = coupRooms[roomCode];
-                            if (!finalRoom) return;
-                            const finalRevealer = finalRoom.players.find(p => p.id === revealerId);
-                            if (finalRevealer) {
-                                finalRevealer.isDead = true;
-                            }
-
-                            const alivePlayers = finalRoom.players.filter(p => !p.isDead);
-                            if (alivePlayers.length <= 1) {
-                                finalRoom.phase = 'GAME_OVER';
-                                finalRoom.winner = alivePlayers[0]?.name || '생존자 없음';
-                                finalRoom.actionState = null;
-                                emitCoupUpdate(roomCode, finalRoom);
-                            } else {
-                                finalRoom.actionState = null;
-                                nextTurnCoup(finalRoom, roomCode);
-                                emitCoupUpdate(roomCode, finalRoom);
-                            }
-                        }, 3000);
-                    }
-                }, 1500);
                 return;
             }
         } else if (curActionType === 'FOREIGN_AID_BLOCK_CHALLENGE') {
