@@ -50,8 +50,7 @@ pokerIo.on('connection', (socket) => {
             if (!existingPlayer) {
                 room.players.push({
                     id: socket.id, userId, name: userName, isBot,
-                    ready: room.players.length === 0, score: 0, hand: [], penalties: [], handCount: 0,
-                    isReconnecting: false, connected: true
+                    ready: room.players.length === 0, score: 0, hand: [], penalties: [], handCount: 0, connected: true
                 });
             } else {
                 existingPlayer.id = socket.id;
@@ -98,7 +97,7 @@ flip7Io.on('connection', (socket) => {
 // ==========================================
 const coupIo = io.of('/coup');
 const coupRooms = {};
-const coupDisconnectTimers = {}; // 1분 이내 재접속 유예 타이머 관리 맵
+const coupDisconnectTimers = {}; // 1분 이내 재접속 유예 타이머 맵
 
 function emitCoupUpdate(roomCode, room) {
     const safeRoom = {
@@ -468,15 +467,34 @@ coupIo.on('connection', (socket) => {
             let existingPlayer = room.players.find(p => (userId && p.userId === userId) || p.name === userName);
             
             if (!existingPlayer) {
-                // 게임 중 새로 참여하는 유저는 관전 또는 대기 상태로 처리 방지 (게임 중 튕겼다 재접속 시 유예 기간 내에 기존 데이터 매칭)
+                // 이미 게임이 시작된 방에 다른 아이디로 접속한 경우 -> 관전자로 등록
+                if (room.phase === 'GAME') {
+                    if (!room.spectators) room.spectators = [];
+                    let existingSpec = room.spectators.find(s => (userId && s.userId === userId) || s.name === userName);
+                    if (!existingSpec) {
+                        room.spectators.push({ id: socket.id, userId, name: userName });
+                    } else {
+                        existingSpec.id = socket.id;
+                    }
+                    emitCoupUpdate(roomCode, room);
+                    return;
+                }
+
+                // 대기실(LOBBY)인 경우 정상 참여
                 room.players.push({
                     id: socket.id, name: userName, userId, isBot, ready: room.players.length === 0,
                     coins: 2, influence: [], isDead: false, connected: true
                 });
             } else {
+                // 기존 플레이어가 1분 내 재접속한 경우 -> 세션 복구
                 existingPlayer.id = socket.id;
                 existingPlayer.connected = true;
                 existingPlayer.isReconnecting = false;
+                
+                // 혹시 관전자 목록에 겹쳐있다면 제거
+                if (room.spectators) {
+                    room.spectators = room.spectators.filter(s => s.userId !== userId);
+                }
             }
             emitCoupUpdate(roomCode, room);
         } catch(e) {}
@@ -529,7 +547,7 @@ coupIo.on('connection', (socket) => {
             const actor = room.players.find(p => p.id === socket.id);
             const target = room.players.find(p => p.id === targetId);
 
-            if (socket.id !== room.turnId || actor.isDead || room.actionState) return;
+            if (!actor || socket.id !== room.turnId || actor.isDead || room.actionState) return;
             if (actor.coins >= 10 && action !== 'COUP') return;
 
             clearCoupTimer(room);
@@ -698,6 +716,7 @@ coupIo.on('connection', (socket) => {
             const room = coupRooms[roomCode];
             if (!room) return;
             room.players = room.players.filter(p => p.id !== socket.id);
+            if (room.spectators) room.spectators = room.spectators.filter(s => s.id !== socket.id);
             socket.leave(roomCode);
             if (room.players.length === 0) {
                 clearCoupTimer(room);
@@ -708,11 +727,17 @@ coupIo.on('connection', (socket) => {
         } catch(e){}
     });
 
-    // ⏱️ [버그 수정] 튕김/연결 끊김 발생 시 1분(60초) 동안 유예하며, 1분 내 미복구 시 방에서 퇴장 및 턴/흐름 막힘 방지 로직 보완
+    // ⏱️ [튕김 및 재접속 관리] 연결 해제 시 관전자는 즉시 제거, 게임 중 플레이어는 1분 유예 후 미복구 시 퇴장 처리
     socket.on('disconnect', () => {
         try {
             for (let roomCode in coupRooms) {
                 const room = coupRooms[roomCode];
+                
+                // 관전자일 경우 즉시 제거
+                if (room.spectators) {
+                    room.spectators = room.spectators.filter(s => s.id !== socket.id);
+                }
+
                 const player = room.players.find(p => p.id === socket.id);
                 if (player) {
                     player.connected = false;
@@ -720,7 +745,7 @@ coupIo.on('connection', (socket) => {
                     
                     if (coupDisconnectTimers[disconnectKey]) clearTimeout(coupDisconnectTimers[disconnectKey]);
                     
-                    // LOBBY 상태일 때는 즉시 제거, GAME 상태일 때는 1분 유예
+                    // 로비 상태일 때는 즉시 제거
                     if (room.phase === 'LOBBY') {
                         room.players = room.players.filter(p => p.id !== socket.id);
                         if (room.players.length === 0) {
@@ -730,6 +755,7 @@ coupIo.on('connection', (socket) => {
                             emitCoupUpdate(roomCode, room);
                         }
                     } else {
+                        // 게임 중 튕겼을 때 1분(60초) 유예 부여
                         coupDisconnectTimers[disconnectKey] = setTimeout(() => {
                             delete coupDisconnectTimers[disconnectKey];
                             const currentRoom = coupRooms[roomCode];
@@ -740,7 +766,6 @@ coupIo.on('connection', (socket) => {
                                 clearCoupTimer(currentRoom);
                                 delete coupRooms[roomCode];
                             } else {
-                                // 만약 튕긴 유저가 현재 차례였거나 응답 대기 중이었다면 먹통 방지를 위해 다음 턴/다음 상태로 강제 진행
                                 if (currentRoom.turnId === player.id) {
                                     nextTurnCoup(currentRoom, roomCode);
                                 } else if (currentRoom.actionState && currentRoom.actionState.currentPromptId === player.id) {
@@ -748,7 +773,7 @@ coupIo.on('connection', (socket) => {
                                 }
                                 emitCoupUpdate(roomCode, currentRoom);
                             }
-                        }, 60000); // 1분 (60초)
+                        }, 60000); // 1분
                     }
                 }
             }
