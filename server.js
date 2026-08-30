@@ -434,7 +434,10 @@ function processRevealCard(room, roomCode, revealerId, cardIndex) {
                     coupIo.to(roomCode).emit('actionAnnounce', { actorName: curActorName, actionText: '도전 실패로 카드를 잃었습니다. (강탈 방어 성공)' });
                 } else if (curActionType === 'DUKE_BLOCKER_PENALTY') {
                     coupIo.to(roomCode).emit('actionAnnounce', { actorName: curActorName, actionText: '방어 실패로 카드를 잃었습니다. (징세 방어 실패)' });
+                } else if (curActionType === 'ASSASSIN_ATTACKER_DEATH') {
+                    coupIo.to(roomCode).emit('actionAnnounce', { actorName: curActorName, actionText: '암살 실패로 카드를 잃었습니다.' });
                 }
+                
                 currentRoom.actionState = null;
                 nextTurnCoup(currentRoom, currentRoom);
                 emitCoupUpdate(currentRoom, currentRoom);
@@ -442,7 +445,6 @@ function processRevealCard(room, roomCode, revealerId, cardIndex) {
             }
         } else if (curActionType === 'ASSASSIN_BLOCK_CHALLENGE') {
             if (isSuccess) {
-                // 방어 성공 (귀부인 맞음): 방어자의 카드를 덱에 넣고 섞은 뒤 새 카드로 교체, 암살자에게 암살 실패 벌칙(패 선택) 부여
                 const matchedRole = currentCard.role;
                 currentRoom.deck.push(matchedRole);
                 currentRoom.deck.sort(() => Math.random() - 0.5);
@@ -475,12 +477,10 @@ function processRevealCard(room, roomCode, revealerId, cardIndex) {
                     return;
                 }
             } else {
-                // 방어 실패 (귀부인 아님): 첫 번째 카드 사망 처리 후, 즉시 두 번째 카드를 뒤집어 확인(다이) 후 사망 처리 후 다음 턴
                 currentCard.alive = false;
                 
                 coupIo.to(roomCode).emit('actionAnnounce', { actorName: curActorName, actionText: '경호 실패! 암살로 인해 카드를 잃습니다.' });
 
-                // 두 번째 카드도 바로 사망 처리
                 const secondCardIdx = currentRevealer.influence.findIndex((c, idx) => idx !== cardIndex && c.alive);
                 if (secondCardIdx !== -1) {
                     currentRevealer.influence[secondCardIdx].alive = false;
