@@ -22,11 +22,12 @@ app.get('/', (req, res) => {
 
 const server = http.createServer(app);
 
+// 서버 연결 끊김 및 세션 튕김 현상 방지를 위한 소켓 타임아웃 및 핑 주기 연장 설정
 const io = new Server(server, {
     cors: { origin: "*", methods: ["GET", "POST", "OPTIONS"] },
-    pingTimeout: 60000, 
+    pingTimeout: 120000, 
     pingInterval: 25000,
-    connectTimeout: 45000,
+    connectTimeout: 60000,
     transports: ['polling', 'websocket'],
     allowEIO3: true
 });
@@ -947,8 +948,6 @@ coupIo.on('connection', (socket) => {
         } catch(e){}
     });
 
-    socket.on('leaveRoom', (roomCode) => leaveCoupRoom(socket, roomCode));
-    
     socket.on('disconnect', () => {
         try {
             for (const roomCode in coupRooms) {
