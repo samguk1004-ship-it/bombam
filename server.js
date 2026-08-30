@@ -576,7 +576,7 @@ function clearCoupTimer(room) {
 }
 
 const createCoupDeck = (playerCount) => {
-    const chars = ['공작', '자객', '사령관', '외교관', '귀부인'];
+    const chars = ['외교관', '사령관', '공작', '자객', '귀부인'];
     const copies = playerCount >= 7 ? 4 : 3;
     let deck = [];
     chars.forEach(c => { 
@@ -595,7 +595,7 @@ function killCoupInfluence(target) {
 
 function nextTurnCoup(room, roomCode) {
     clearCoupTimer(room);
-    room.actionState = null; // ★ 무조건 상태 초기화 방어막 (플레이어 나감 등에 대비)
+    room.actionState = null; 
     
     do {
         room.turnIndex = (room.turnIndex + 1) % room.players.length;
@@ -688,12 +688,14 @@ function processChallengeResponse(room, roomCode, playerId, challenge) {
             }
         });
     } else {
+        // ★ challenge가 false (카드를 확인하지 않음 / '아니오' 선택 시)
         const actor = room.players.find(p => p.id === playerId);
         if(actor) {
-            coupIo.to(roomCode).emit('actionAnnounce', { actorName: actor.name, actionText: room.actionState.type === 'DUKE' ? '징세를 실패했습니다.' : '원조에 실패했습니다.' });
-            
             if (room.actionState.type === 'DUKE') {
-                killCoupInfluence(actor); 
+                // 징세 방해에 대해 도전하지 않음 -> 징세 실패 안내만 알리고, 카드 손상 없음! 다음 차례로 진행
+                coupIo.to(roomCode).emit('actionAnnounce', { actorName: actor.name, actionText: '징세를 실패했습니다.' });
+            } else {
+                coupIo.to(roomCode).emit('actionAnnounce', { actorName: actor.name, actionText: '원조에 실패했습니다.' });
             }
         }
         
@@ -861,7 +863,6 @@ coupIo.on('connection', (socket) => {
             clearCoupTimer(room);
 
             if (action === 'FOREIGN_AID') {
-                // ★ 즉시 상태를 'ANNOUNCING'으로 변경하여 중복/연타 클릭 완벽 방지
                 room.actionState = { phase: 'ANNOUNCING' }; 
                 coupIo.to(roomCode).emit('actionAnnounce', { actorName: actor.name, actionText: '원조를 사용했습니다.' });
                 
@@ -926,7 +927,6 @@ coupIo.on('connection', (socket) => {
     socket.on('blockResponse', ({ roomCode, block }) => {
         try {
             const room = coupRooms[roomCode];
-            // ★ 상태 검증 로직 대폭 강화 (중복 답변 완전 차단)
             if (!room || !room.actionState || room.actionState.phase !== 'WAIT_BLOCK' || room.actionState.currentPromptId !== socket.id) return;
             processBlockResponse(room, roomCode, socket.id, block);
         } catch(e){}
