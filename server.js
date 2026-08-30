@@ -98,7 +98,7 @@ flip7Io.on('connection', (socket) => {
 // ==========================================
 const coupIo = io.of('/coup');
 const coupRooms = {};
-const disconnectTimers = {};
+const coupDisconnectTimers = {}; // 1분 이내 재접속 유예 타이머 관리 맵
 
 function emitCoupUpdate(roomCode, room) {
     const safeRoom = {
@@ -116,7 +116,6 @@ function clearCoupTimer(room) {
     room.timer = null;
 }
 
-// ⏱️ [버그 수정] 타이머 0초 만료 시 즉시 턴이 넘어가거나 다음 상태로 진행되도록 보완된 타이머 함수
 function startCoupTimer(room, roomCode, durationSec, callback) {
     clearCoupTimer(room);
     const durationMs = durationSec * 1000;
@@ -149,6 +148,9 @@ function nextTurnCoup(room, roomCode) {
     clearCoupTimer(room);
     room.actionState = null; 
     
+    const activePlayers = room.players.filter(p => !p.isDead);
+    if (activePlayers.length <= 1) return;
+
     do {
         room.turnIndex = (room.turnIndex + 1) % room.players.length;
     } while (room.players[room.turnIndex].isDead);
@@ -236,7 +238,6 @@ function setNextBlocker(room, roomCode) {
                     room.actionState.revealerId = target.id;
                     room.actionState.type = 'ASSASSIN_DEATH';
                     emitCoupUpdate(roomCode, room);
-                    // 타이머 0초 시 자동 카드 선택(첫 생존 카드 강제 오픈)
                     startCoupTimer(room, roomCode, 30, () => {
                         const curRoom = coupRooms[roomCode];
                         if (!curRoom || !curRoom.actionState || curRoom.actionState.phase !== 'REVEAL_CARD') return;
@@ -459,14 +460,15 @@ coupIo.on('connection', (socket) => {
             const room = coupRooms[roomCode];
 
             const disconnectKey = `${roomCode}_${userId}`;
-            if (disconnectTimers[disconnectKey]) {
-                clearTimeout(disconnectTimers[disconnectKey]);
-                delete disconnectTimers[disconnectKey];
+            if (coupDisconnectTimers[disconnectKey]) {
+                clearTimeout(coupDisconnectTimers[disconnectKey]);
+                delete coupDisconnectTimers[disconnectKey];
             }
 
             let existingPlayer = room.players.find(p => (userId && p.userId === userId) || p.name === userName);
             
             if (!existingPlayer) {
+                // 게임 중 새로 참여하는 유저는 관전 또는 대기 상태로 처리 방지 (게임 중 튕겼다 재접속 시 유예 기간 내에 기존 데이터 매칭)
                 room.players.push({
                     id: socket.id, name: userName, userId, isBot, ready: room.players.length === 0,
                     coins: 2, influence: [], isDead: false, connected: true
@@ -474,6 +476,7 @@ coupIo.on('connection', (socket) => {
             } else {
                 existingPlayer.id = socket.id;
                 existingPlayer.connected = true;
+                existingPlayer.isReconnecting = false;
             }
             emitCoupUpdate(roomCode, room);
         } catch(e) {}
@@ -586,18 +589,14 @@ coupIo.on('connection', (socket) => {
                 room.actionState = { type: 'AMBASSADOR', actorId: actor.id, phase: 'WAIT_AMBASSADOR' };
                 coupIo.to(socket.id).emit('startAmbassadorAnim', { actorId: actor.id, drawnCards: allFour });
                 
-                // [버그 수정] 교환 시 타이머 추가 (30초 내에 선택 안 하면 임의로 2장 유지 후 자동 턴 넘김)
                 startCoupTimer(room, roomCode, 30, () => {
                     const curRoom = coupRooms[roomCode];
                     if (!curRoom || !curRoom.actionState || curRoom.actionState.phase !== 'WAIT_AMBASSADOR') return;
                     const p = curRoom.players.find(pl => pl.id === actor.id);
                     if (p) {
-                        // 시간 초과 시 기존 생존 카드들 유지하고 뽑은 카드들은 덱으로 반환
-                        const aliveIndices = [];
-                        p.influence.forEach((c, idx) => { if (c.alive) aliveIndices.push(idx); });
                         curRoom.actionState = null;
                         nextTurnCoup(curRoom, roomCode);
-                        emitCoupUpdate(roomCode, curRoom);
+                        emitCoupUpdate(curRoom, curRoom);
                     }
                 });
                 return;
@@ -614,7 +613,6 @@ coupIo.on('connection', (socket) => {
         } catch(e) {}
     });
 
-    // [버그 수정] 외교관(카드 교환) 완료 핸들러 추가
     socket.on('ambassadorChosen', ({ roomCode, keepIndices, returnIndices }) => {
         try {
             const room = coupRooms[roomCode];
@@ -628,13 +626,6 @@ coupIo.on('connection', (socket) => {
             const keptRoles = keepIndices.map(idx => allCards[idx]);
             const returnedRoles = returnIndices.map(idx => allCards[idx]);
 
-            // 플레이어의 살아있는 카드 슬롯에 유지할 카드들 반영
-            let aliveCount = 0;
-            player.influence.forEach(c => {
-                if (c.alive) aliveCount++;
-            });
-
-            // 교환된 역할 배정
             let keptIdx = 0;
             player.influence.forEach(c => {
                 if (c.alive && keptIdx < keptRoles.length) {
@@ -642,7 +633,6 @@ coupIo.on('connection', (socket) => {
                 }
             });
 
-            // 반환된 카드들은 덱에 다시 섞기
             returnedRoles.forEach(r => room.deck.push(r));
             room.deck.sort(() => Math.random() - 0.5);
 
@@ -660,11 +650,11 @@ coupIo.on('connection', (socket) => {
             const room = coupRooms[roomCode];
             if (!room || !room.actionState || room.actionState.phase !== 'WAIT_BLOCK' || room.actionState.currentPromptId !== socket.id) return;
             
-            if (room.actionState.type === 'ASSASSIN' || room.actionState.type === 'CAPTAIN') {
+            if (room.actionState.type === 'ASSASSIN' || room.actionState.type === 'CAPTAIN' || room.actionState.type === 'FOREIGN_AID') {
                 clearCoupTimer(room);
                 if (block) {
                     room.actionState.blockerId = socket.id;
-                    room.actionState.blockRole = blockRole || (room.actionState.type === 'ASSASSIN' ? '귀부인' : '사령관');
+                    room.actionState.blockRole = blockRole || (room.actionState.type === 'ASSASSIN' ? '귀부인' : (room.actionState.type === 'FOREIGN_AID' ? '공작' : '사령관'));
                     room.actionState.phase = 'WAIT_CHALLENGE';
                     emitCoupUpdate(roomCode, room);
                     startCoupTimer(room, roomCode, 30, () => {
@@ -718,6 +708,7 @@ coupIo.on('connection', (socket) => {
         } catch(e){}
     });
 
+    // ⏱️ [버그 수정] 튕김/연결 끊김 발생 시 1분(60초) 동안 유예하며, 1분 내 미복구 시 방에서 퇴장 및 턴/흐름 막힘 방지 로직 보완
     socket.on('disconnect', () => {
         try {
             for (let roomCode in coupRooms) {
@@ -727,21 +718,38 @@ coupIo.on('connection', (socket) => {
                     player.connected = false;
                     const disconnectKey = `${roomCode}_${player.userId}`;
                     
-                    if (disconnectTimers[disconnectKey]) clearTimeout(disconnectTimers[disconnectKey]);
+                    if (coupDisconnectTimers[disconnectKey]) clearTimeout(coupDisconnectTimers[disconnectKey]);
                     
-                    disconnectTimers[disconnectKey] = setTimeout(() => {
-                        delete disconnectTimers[disconnectKey];
-                        const currentRoom = coupRooms[roomCode];
-                        if (!currentRoom) return;
-                        
-                        currentRoom.players = currentRoom.players.filter(p => p.userId !== player.userId);
-                        if (currentRoom.players.length === 0) {
-                            clearCoupTimer(currentRoom);
+                    // LOBBY 상태일 때는 즉시 제거, GAME 상태일 때는 1분 유예
+                    if (room.phase === 'LOBBY') {
+                        room.players = room.players.filter(p => p.id !== socket.id);
+                        if (room.players.length === 0) {
+                            clearCoupTimer(room);
                             delete coupRooms[roomCode];
                         } else {
-                            emitCoupUpdate(roomCode, currentRoom);
+                            emitCoupUpdate(roomCode, room);
                         }
-                    }, 60000);
+                    } else {
+                        coupDisconnectTimers[disconnectKey] = setTimeout(() => {
+                            delete coupDisconnectTimers[disconnectKey];
+                            const currentRoom = coupRooms[roomCode];
+                            if (!currentRoom) return;
+                            
+                            currentRoom.players = currentRoom.players.filter(p => p.userId !== player.userId);
+                            if (currentRoom.players.length === 0) {
+                                clearCoupTimer(currentRoom);
+                                delete coupRooms[roomCode];
+                            } else {
+                                // 만약 튕긴 유저가 현재 차례였거나 응답 대기 중이었다면 먹통 방지를 위해 다음 턴/다음 상태로 강제 진행
+                                if (currentRoom.turnId === player.id) {
+                                    nextTurnCoup(currentRoom, roomCode);
+                                } else if (currentRoom.actionState && currentRoom.actionState.currentPromptId === player.id) {
+                                    processBlockResponse(currentRoom, roomCode, player.id, false);
+                                }
+                                emitCoupUpdate(roomCode, currentRoom);
+                            }
+                        }, 60000); // 1분 (60초)
+                    }
                 }
             }
         } catch(e) {}
