@@ -331,9 +331,10 @@ function processChallengeResponse(room, roomCode, playerId, challenge) {
         room.actionState.phase = 'REVEAL_CARD';
         room.actionState.revealerId = room.actionState.blockerId;
         
-        // 해외 원조에 대한 공작 방어 도전일 경우 구분을 위해 actionState 타입 조정
         if (room.actionState.type === 'FOREIGN_AID') {
             room.actionState.type = 'FOREIGN_AID_BLOCK_CHALLENGE';
+        } else if (room.actionState.type === 'CAPTAIN') {
+            room.actionState.type = 'CAPTAIN_BLOCK_CHALLENGE';
         }
 
         emitCoupUpdate(roomCode, room);
@@ -415,7 +416,6 @@ function processRevealCard(room, roomCode, revealerId, cardIndex) {
             }
         } else if (curActionType === 'FOREIGN_AID_BLOCK_CHALLENGE') {
             if (isSuccess) {
-                // 공작 카드가 맞아서 방어 성공 -> 덱에 넣고 카드 교체 후 해외 원조 실패 안내 문구 출력
                 const matchedRole = currentCard.role;
                 currentRoom.deck.push(matchedRole);
                 currentRoom.deck.sort(() => Math.random() - 0.5);
@@ -428,7 +428,6 @@ function processRevealCard(room, roomCode, revealerId, cardIndex) {
                 emitCoupUpdate(currentRoom, currentRoom);
                 return;
             } else {
-                // 도전 실패로 방어자 카드 사망
                 currentCard.alive = false;
                 if (!currentRevealer.influence.some(c => c.alive)) currentRevealer.isDead = true;
                 
@@ -579,15 +578,12 @@ coupIo.on('connection', (socket) => {
 
             clearCoupTimer(room);
 
+            // 강탈(CAPTAIN) 액션 선택 시 중복 선언 방지를 위해 바로 actionState 설정 후 방해 프로세스 진입
             if (action === 'CAPTAIN' && target) {
-                room.actionState = { phase: 'ANNOUNCING' };
+                room.actionState = { type: 'CAPTAIN', actorId: actor.id, targetId: target.id, askedList: [], phase: 'WAIT_BLOCK' };
                 coupIo.to(roomCode).emit('actionAnnounce', { actorName: actor.name, actionText: `${actor.name}님이 ${target.name}님을 강탈합니다.` });
-                setTimeout(() => {
-                    const currentRoom = coupRooms[roomCode];
-                    if (!currentRoom) return;
-                    currentRoom.actionState = { type: 'CAPTAIN', actorId: actor.id, targetId: target.id, askedList: [], phase: 'WAIT_BLOCK' };
-                    setNextBlocker(currentRoom, currentRoom);
-                }, 1500);
+                setNextBlocker(room, roomCode);
+                emitCoupUpdate(roomCode, room);
                 return;
             }
 
