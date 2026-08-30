@@ -746,9 +746,22 @@ coupIo.on('connection', (socket) => {
                 const hasDuke = blocker.influence.some(c => c.alive && c.role === '공작');
 
                 if (hasDuke) {
-                    room.actionState.phase = 'LOSE_CARD';
-                    room.actionState.loserId = actor.id;
+                    // ★ NEW 로직: 상대방(방해자)의 공작 카드를 찾아 중앙덱에 넣고 새로 뽑게 함
+                    const dukeCard = blocker.influence.find(c => c.alive && c.role === '공작');
+                    if (dukeCard) {
+                        room.deck.push('공작');
+                        room.deck.sort(() => Math.random() - 0.5);
+                        dukeCard.role = room.deck.pop();
+                    }
+
+                    // 나는 잃는 페널티 없이 원조 실패 문구만 출력
+                    coupIo.to(roomCode).emit('actionAnnounce', { actorName: actor.name, actionText: '원조에 실패했습니다.' });
+
+                    // 코인 획득 없이 바로 턴 종료
+                    room.actionState = null;
+                    nextTurnCoup(room);
                 } else {
+                    // 방해자가 거짓말이었을 경우 기존 로직 유지 (요청자 코인 +2, 방해자가 카드 잃음)
                     actor.coins += 2;
                     room.actionState.phase = 'LOSE_CARD';
                     room.actionState.loserId = blocker.id;
