@@ -22,7 +22,6 @@ app.get('/', (req, res) => {
 
 const server = http.createServer(app);
 
-// [수정] 서버 연결 끊김 및 세션 튕김 현상 방지를 위한 소켓 타임아웃 및 핑 주기 연장 설정
 const io = new Server(server, {
     cors: { origin: "*", methods: ["GET", "POST", "OPTIONS"] },
     pingTimeout: 120000, 
@@ -82,10 +81,7 @@ function checkGameOver(currentRoom, roomCode) {
 }
 
 pokerIo.on('connection', (socket) => {
-    // [수정] 클라이언트 하트비트 수신 시 응답하여 연결 강제 유지
-    socket.on('pingHeartbeat', () => {
-        socket.emit('pongHeartbeat');
-    });
+    socket.on('pingHeartbeat', () => { socket.emit('pongHeartbeat'); });
 
     socket.on('joinRoom', ({ roomCode, userName, userId, isBot }) => {
         try {
@@ -270,65 +266,6 @@ pokerIo.on('connection', (socket) => {
         } catch(e) {}
     });
 
-    socket.on('forceTurnSkip', ({ roomCode, targetId }) => {
-        try {
-            const room = pokerRooms[roomCode];
-            if (!room || room.paused) return;
-            const targetPlayer = room.players.find(p => p.id === targetId);
-            if (!targetPlayer) return;
-
-            if (room.isProcessingSkip) return;
-            room.isProcessingSkip = true;
-            setTimeout(() => { room.isProcessingSkip = false; }, 1000);
-
-            if (room.phase === 'GAME' && room.turnId === targetId && !room.activeOffer) {
-                if (targetPlayer.hand.length > 0) {
-                    const card = targetPlayer.hand[Math.floor(Math.random() * targetPlayer.hand.length)];
-                    const possibleTargets = room.players.filter(p => p.id !== targetId && p.connected !== false);
-                    if (possibleTargets.length > 0) {
-                        const rec = possibleTargets[Math.floor(Math.random() * possibleTargets.length)];
-                        targetPlayer.hand = targetPlayer.hand.filter(c => c.id !== card.id);
-                        targetPlayer.handCount = targetPlayer.hand.length;
-                        const claim = BASE_ANIMALS[Math.floor(Math.random() * BASE_ANIMALS.length)].name;
-                        targetPlayer.lastClaim = claim;
-                        room.phase = 'RESPONSE';
-                        room.activeOffer = { senderId: targetId, attackerId: targetId, receiverId: rec.id, card, claim, seenIds: [targetId] };
-                        pokerIo.to(roomCode).emit('onOffer', room);
-                    }
-                }
-            } else if (room.phase === 'RESPONSE' && room.activeOffer && room.activeOffer.receiverId === targetId) {
-                const guessIsTrue = Math.random() < 0.5;
-                const offer = room.activeOffer; 
-                const actualCard = offer.card;
-                
-                let isTrue = false;
-                if (offer.claim === '왕카드') isTrue = (actualCard.isKing === true);
-                else isTrue = (actualCard.animalName === offer.claim);
-
-                const guessCorrect = (isTrue === guessIsTrue);
-                const loserId = guessCorrect ? offer.senderId : offer.receiverId;
-                const winnerId = guessCorrect ? offer.receiverId : offer.senderId;
-
-                let extraCard = null;
-                if (actualCard.isKing || offer.claim === '왕카드') {
-                    const winner = room.players.find(p => p.id === winnerId);
-                    if (winner && winner.penalties.length > 0) {
-                        const rIndex = Math.floor(Math.random() * winner.penalties.length);
-                        extraCard = winner.penalties.splice(rIndex, 1)[0];
-                    }
-                }
-                const loser = room.players.find(p => p.id === loserId);
-                if (loser) { loser.penalties.push(actualCard); if (extraCard) loser.penalties.push(extraCard); }
-
-                room.phase = 'REVEAL';
-                room.revealData = { winnerId, penaltyId: loserId, guessCorrect, actualCard, claim: offer.claim, extraCard };
-                pokerIo.to(roomCode).emit('revealStart', room);
-
-                setTimeout(() => { checkGameOver(room, roomCode); }, 5500);
-            }
-        } catch(e) {}
-    });
-
     socket.on('leaveRoom', (roomCode) => leavePokerRoom(socket, roomCode));
     
     socket.on('disconnect', () => { 
@@ -430,10 +367,7 @@ const flip7Io = io.of('/flip7');
 const flip7Rooms = {};
 
 flip7Io.on('connection', (socket) => {
-    // [수정] 클라이언트 하트비트 수신
-    socket.on('pingHeartbeat', () => {
-        socket.emit('pongHeartbeat');
-    });
+    socket.on('pingHeartbeat', () => { socket.emit('pongHeartbeat'); });
 
     socket.on('joinRoom', ({ roomCode, userName, userId, isBot }) => {
         try {
@@ -614,7 +548,7 @@ function nextTurnCoup(room, roomCode) {
     } while (room.players[room.turnIndex].isDead);
     room.turnId = room.players[room.turnIndex].id;
 
-    // 턴당 60초 제한 시간 (시간 초과 시 자동으로 소득(+1) 챙기고 다음 턴으로 정상 진행)
+    // [수정] 최초 턴 시작 시 기준: 60초 타이머 설정 및 시간 초과 시 자동 소득 처리
     startCoupTimer(room, roomCode, 60, () => {
         const currentRoom = coupRooms[roomCode];
         if (!currentRoom || currentRoom.phase !== 'GAME') return;
@@ -653,7 +587,7 @@ function setNextBlocker(room, roomCode) {
     }
 
     if (found) {
-        // 블록 질문 선택 시 30초 제한 시간 연동
+        // [수정] 선택창(방어 여부) 진입 시: 30초 타이머로 전환 및 시간 초과 시 '아니오(방어 안 함)' 처리 리셋
         startCoupTimer(room, roomCode, 30, () => processBlockResponse(room, roomCode, room.actionState.currentPromptId, false));
     } else {
         clearCoupTimer(room);
@@ -671,12 +605,12 @@ function setNextBlocker(room, roomCode) {
 }
 
 function processBlockResponse(room, roomCode, playerId, block) {
-    clearCoupTimer(room);
+    clearCoupTimer(room); // 선택시 타이머 리셋
     if (block) { 
         room.actionState.blockerId = playerId;
         room.actionState.phase = 'WAIT_CHALLENGE';
         
-        // 챌린지 질문 선택 시 30초 제한 시간 연동
+        // [수정] 챌린지 선택창 진입 시: 30초 타이머 및 시간 초과 시 '아니오(도전 안 함)' 처리 리셋
         startCoupTimer(room, roomCode, 30, () => processChallengeResponse(room, roomCode, room.actionState.actorId, false));
     } else { 
         room.actionState.askedList.push(playerId);
@@ -687,12 +621,12 @@ function processBlockResponse(room, roomCode, playerId, block) {
 }
 
 function processChallengeResponse(room, roomCode, playerId, challenge) {
-    clearCoupTimer(room);
+    clearCoupTimer(room); // 선택시 타이머 리셋
     if (challenge) { 
         room.actionState.phase = 'REVEAL_CARD';
         room.actionState.revealerId = (room.actionState.type === 'DUKE') ? room.actionState.actorId : room.actionState.blockerId;
         
-        // 카드 공개 질문 선택 시 30초 제한 시간 연동
+        // [수정] 카드 공개 선택창 진입 시: 30초 타이머 및 시간 초과 시 첫 번째 카드 자동 공개 처리 리셋
         startCoupTimer(room, roomCode, 30, () => {
             const revealer = room.players.find(p => p.id === room.actionState.revealerId);
             if (revealer) {
@@ -717,7 +651,7 @@ function processChallengeResponse(room, roomCode, playerId, challenge) {
 }
 
 function processRevealCard(room, roomCode, revealerId, cardIndex) {
-    clearCoupTimer(room);
+    clearCoupTimer(room); // 카드 선택시 타이머 리셋
     const revealer = room.players.find(p => p.id === revealerId);
     const card = revealer.influence[cardIndex];
     if (!card || !card.alive) return;
@@ -774,10 +708,7 @@ function processRevealCard(room, roomCode, revealerId, cardIndex) {
 
 
 coupIo.on('connection', (socket) => {
-    // [수정] 클라이언트 하트비트 수신
-    socket.on('pingHeartbeat', () => {
-        socket.emit('pongHeartbeat');
-    });
+    socket.on('pingHeartbeat', () => { socket.emit('pongHeartbeat'); });
 
     socket.on('joinRoom', ({ roomCode, userName, userId, isBot }) => {
         try {
@@ -876,7 +807,7 @@ coupIo.on('connection', (socket) => {
             const target = room.players.find(p => p.id === targetId);
 
             if (socket.id !== room.turnId || actor.isDead || room.actionState) return;
-            clearCoupTimer(room);
+            clearCoupTimer(room); // 액션 제출 시 60초 타이머 리셋
 
             if (action === 'FOREIGN_AID') {
                 room.actionState = { phase: 'ANNOUNCING' }; 
@@ -973,7 +904,6 @@ coupIo.on('connection', (socket) => {
                     player.connected = false;
                     
                     if (room.phase === 'GAME') {
-                        // 게임 중 일시적 끊김 발생 시 30초 동안 유예 (세션 유지)
                         if (!room.timers) room.timers = {};
                         room.timers[player.userId || player.id] = setTimeout(() => {
                             try {
@@ -990,7 +920,7 @@ coupIo.on('connection', (socket) => {
                                         currentRoom.phase = 'GAME_OVER';
                                         currentRoom.winner = currentRoom.players.find(p => !p.isDead)?.name || '생존자 없음';
                                     } else if (currentRoom.phase === 'GAME' && currentRoom.turnId === socket.id) {
-                                        nextTurnCoup(currentRoom, roomCode);
+                                        nextTurnCoup(room, roomCode);
                                     }
                                     emitCoupUpdate(roomCode, currentRoom);
                                 }
