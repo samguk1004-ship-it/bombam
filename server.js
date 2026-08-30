@@ -627,7 +627,6 @@ function processBlockResponse(room, roomCode, playerId, block) {
         room.actionState.blockerId = playerId;
         
         if (room.actionState.type === 'ASSASSIN') {
-            // 귀부인 경호 '예' 선택 시: 상대방에게 챌린지를 묻지 않고 곧바로 수비자가 귀부인 카드를 오픈하도록 설정
             room.actionState.phase = 'REVEAL_CARD';
             room.actionState.revealerId = playerId;
             room.actionState.type = 'ASSASSIN_BLOCK_CHALLENGE';
@@ -658,7 +657,7 @@ function processBlockResponse(room, roomCode, playerId, block) {
             if (target && !target.isDead) {
                 room.actionState.phase = 'REVEAL_CARD';
                 room.actionState.revealerId = target.id;
-                room.actionState.type = 'ASSASSIN_DEATH';
+                room.actionState.type = 'ASSASSIN_DEATH'; // ✅ 암살 방어 거부 시 수비자가 카드 잃는 단계로 정상 설정
                 emitCoupUpdate(roomCode, room);
                 return;
             }
@@ -709,8 +708,11 @@ function processRevealCard(room, roomCode, revealerId, cardIndex) {
     const actionType = room.actionState ? room.actionState.type : '';
     
     let isSuccess = false;
+    let revealedRoleToAnim = card.role;
+
     if (actionType === 'ASSASSIN_BLOCK_CHALLENGE') {
-        isSuccess = true; // 귀부인 선택 시 무조건 암살 방어 성공 처리
+        isSuccess = true; 
+        revealedRoleToAnim = '귀부인';
     } else if (actionType === 'DUKE') {
         isSuccess = (card.role === '공작');
     } else if (actionType === 'FOREIGN_AID') {
@@ -720,7 +722,7 @@ function processRevealCard(room, roomCode, revealerId, cardIndex) {
     coupIo.to(roomCode).emit('blockRevealAnimation', {
         revealerId: revealer.id,
         cardIndex: cardIndex,
-        revealedRole: '귀부인', // 귀부인으로 고정 표시
+        revealedRole: revealedRoleToAnim,
         isSuccess: isSuccess
     });
 
@@ -749,14 +751,13 @@ function processRevealCard(room, roomCode, revealerId, cardIndex) {
                 return;
             }
         } else if (curActionType === 'ASSASSIN_BLOCK_CHALLENGE') {
-            // 귀부인 선택 후 카드 오픈 및 "암살에 실패했습니다" 안내 문구 출력
             currentCard.role = '귀부인';
             coupIo.to(roomCode).emit('actionAnnounce', { actorName: '', actionText: '암살에 실패했습니다.' });
             
             setTimeout(() => {
                 if (!currentRoom) return;
                 currentRoom.actionState.phase = 'REVEAL_CARD';
-                currentRoom.actionState.revealerId = currentRoom.actionState.actorId; // 공격자 지정
+                currentRoom.actionState.revealerId = currentRoom.actionState.actorId; 
                 currentRoom.actionState.type = 'ASSASSIN_ATTACKER_DEATH';
                 emitCoupUpdate(roomCode, currentRoom);
             }, 2000);
