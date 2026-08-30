@@ -494,7 +494,7 @@ function processRevealCard(room, roomCode, revealerId, cardIndex) {
             emitCoupUpdate(roomCode, currentRoom);
         } else {
             currentRoom.actionState = null;
-            nextTurnCoup(currentRoom, roomCode);
+            nextTurnCoup(room, roomCode);
             emitCoupUpdate(currentRoom, currentRoom);
         }
     }, 3000);
@@ -603,7 +603,7 @@ coupIo.on('connection', (socket) => {
 
             if (action === 'CAPTAIN' && target) {
                 room.actionState = { type: 'CAPTAIN', actorId: actor.id, targetId: target.id, askedList: [], phase: 'WAIT_BLOCK' };
-                coupIo.to(roomCode).emit('actionAnnounce', { actorName: actor.name, actionText: `${actor.name}님이 ${target.name}님을 강탈합니다.` });
+                coupIo.to(roomCode).emit('actionAnnounce', { actorName: actor.name, actionText: `${actor.name}이 ${target.name}을 강탈합니다.` });
                 setNextBlocker(room, roomCode);
                 emitCoupUpdate(roomCode, room);
                 return;
