@@ -727,7 +727,7 @@ coupIo.on('connection', (socket) => {
         } catch(e){}
     });
 
-    // ★ Challenge 발생 시 방해자에게 카드를 확인(선택)하도록 상태 변경 
+    // ★ Challenge 발생 시 확인 여부에 따른 동작 수정
     socket.on('challengeResponse', ({ roomCode, challenge }) => {
         try {
             const room = coupRooms[roomCode];
@@ -738,6 +738,10 @@ coupIo.on('connection', (socket) => {
                 room.actionState.phase = 'REVEAL_CARD';
                 room.actionState.revealerId = room.actionState.blockerId;
             } else {
+                // ★ 아니오(확인 안 함)를 누를 경우 패널티 및 문구 출력
+                const actor = room.players.find(p => p.id === room.actionState.actorId);
+                coupIo.to(roomCode).emit('actionAnnounce', { actorName: actor.name, actionText: '원조에 실패했습니다.' });
+                
                 room.actionState = null;
                 nextTurnCoup(room);
             }
@@ -745,7 +749,7 @@ coupIo.on('connection', (socket) => {
         } catch(e){}
     });
 
-    // ★ 방해자가 카드를 선택했을 때 (애니메이션 및 결과 판정)
+    // 방해자가 카드를 선택했을 때 (애니메이션 및 결과 판정)
     socket.on('revealCard', ({ roomCode, cardIndex }) => {
         try {
             const room = coupRooms[roomCode];
@@ -794,31 +798,6 @@ coupIo.on('connection', (socket) => {
                 
                 coupIo.to(roomCode).emit('roomUpdate', room);
             }, 3000);
-        } catch(e){}
-    });
-
-    // 기존의 강제 카드 버리기 로직 (현 버전 원조에서는 쓰이지 않으나 다른 로직 확장을 위해 보존)
-    socket.on('selectLoseCard', ({ roomCode, cardIndex }) => {
-        try {
-            const room = coupRooms[roomCode];
-            if (!room || !room.actionState || room.actionState.loserId !== socket.id) return;
-
-            const loser = room.players.find(p => p.id === socket.id);
-            if (loser && loser.influence[cardIndex] && loser.influence[cardIndex].alive) {
-                loser.influence[cardIndex].alive = false; 
-                
-                if (!loser.influence.some(c => c.alive)) loser.isDead = true;
-
-                const alivePlayers = room.players.filter(p => !p.isDead);
-                if (alivePlayers.length <= 1) {
-                    room.phase = 'GAME_OVER';
-                    room.winner = alivePlayers[0]?.name || '생존자 없음';
-                } else {
-                    room.actionState = null;
-                    nextTurnCoup(room);
-                }
-                coupIo.to(roomCode).emit('roomUpdate', room);
-            }
         } catch(e){}
     });
 
