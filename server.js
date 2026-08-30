@@ -141,25 +141,25 @@ function nextTurnCoup(room, roomCode) {
     } while (room.players[room.turnIndex].isDead);
     room.turnId = room.players[room.turnIndex].id;
 
-    // 턴 진행 시 넉넉하게 60초 타이머 부여 (유저가 봇일 경우에만 자동 소득 처리되도록 예외 처리 가능)
+    // 60초 타이머 시작 및 리셋
     startCoupTimer(room, roomCode, 60, () => {
         const currentRoom = coupRooms[roomCode];
         if (!currentRoom || currentRoom.phase !== 'GAME') return;
         
         const actor = currentRoom.players.find(p => p.id === currentRoom.turnId);
-        // 플레이어가 사람이면 타이머가 끝나도 강제로 넘기지 않고 유저 선택을 기다리게 하거나 봇일 때만 소득 처리
-        if (actor && !actor.isDead && actor.isBot) {
+        if (actor && !actor.isDead) {
             actor.coins += 1;
             coupIo.to(roomCode).emit('actionAnnounce', { actorName: actor.name, actionText: '시간 초과로 소득(+1) 처리되었습니다.' });
-            const alive = currentRoom.players.filter(p => !p.isDead);
-            if (alive.length <= 1) {
-                currentRoom.phase = 'GAME_OVER';
-                currentRoom.winner = alive[0]?.name || '생존자 없음';
-                emitCoupUpdate(roomCode, currentRoom);
-            } else {
-                nextTurnCoup(currentRoom, roomCode);
-                emitCoupUpdate(currentRoom, currentRoom);
-            }
+        }
+
+        const alive = currentRoom.players.filter(p => !p.isDead);
+        if (alive.length <= 1) {
+            currentRoom.phase = 'GAME_OVER';
+            currentRoom.winner = alive[0]?.name || '생존자 없음';
+            emitCoupUpdate(roomCode, currentRoom);
+        } else {
+            nextTurnCoup(currentRoom, roomCode);
+            emitCoupUpdate(currentRoom, currentRoom);
         }
     });
 }
@@ -170,12 +170,12 @@ function setNextBlocker(room, roomCode) {
 
     if ((room.actionState.type === 'CAPTAIN' || room.actionState.type === 'ASSASSIN') && targetPlayer && !targetPlayer.isDead && !room.actionState.askedList.includes(targetPlayer.id)) {
         room.actionState.currentPromptId = targetPlayer.id;
-        // 선택 창 타이머를 넉넉히 45초로 설정하고 타겟이 봇일 때만 자동 '아니오' 처리
-        startCoupTimer(room, roomCode, 45, () => {
+        // 30초 선택 타이머 시작 및 리셋
+        startCoupTimer(room, roomCode, 30, () => {
             const curRoom = coupRooms[roomCode];
             if (!curRoom || !curRoom.actionState || curRoom.actionState.phase !== 'WAIT_BLOCK') return;
             const promptP = curRoom.players.find(p => p.id === curRoom.actionState.currentPromptId);
-            if (promptP && promptP.isBot) {
+            if (promptP) {
                 processBlockResponse(curRoom, roomCode, promptP.id, false);
             }
         });
@@ -198,11 +198,11 @@ function setNextBlocker(room, roomCode) {
     }
 
     if (found) {
-        startCoupTimer(room, roomCode, 45, () => {
+        startCoupTimer(room, roomCode, 30, () => {
             const curRoom = coupRooms[roomCode];
             if (!curRoom || !curRoom.actionState || curRoom.actionState.phase !== 'WAIT_BLOCK') return;
             const promptP = curRoom.players.find(p => p.id === curRoom.actionState.currentPromptId);
-            if (promptP && promptP.isBot) {
+            if (promptP) {
                 processBlockResponse(curRoom, roomCode, promptP.id, false);
             }
         });
@@ -247,11 +247,12 @@ function processBlockResponse(room, roomCode, playerId, block, blockRole) {
         
         room.actionState.phase = 'WAIT_CHALLENGE';
         emitCoupUpdate(roomCode, room);
-        startCoupTimer(room, roomCode, 45, () => {
+        // 도전 선택 창 30초 타이머 시작 및 리셋
+        startCoupTimer(room, roomCode, 30, () => {
             const curRoom = coupRooms[roomCode];
             if (!curRoom || !curRoom.actionState || curRoom.actionState.phase !== 'WAIT_CHALLENGE') return;
             const actorP = curRoom.players.find(p => p.id === curRoom.actionState.actorId);
-            if (actorP && actorP.isBot) {
+            if (actorP) {
                 processChallengeResponse(curRoom, roomCode, actorP.id, false);
             }
         });
@@ -298,11 +299,12 @@ function processChallengeResponse(room, roomCode, playerId, challenge) {
         room.actionState.phase = 'REVEAL_CARD';
         room.actionState.revealerId = room.actionState.blockerId;
         
-        startCoupTimer(room, roomCode, 45, () => {
+        // 카드 선택 창 30초 타이머 시작 및 리셋
+        startCoupTimer(room, roomCode, 30, () => {
             const currentRoom = coupRooms[roomCode];
             if (!currentRoom || !currentRoom.actionState || currentRoom.actionState.phase !== 'REVEAL_CARD') return;
             const revealer = currentRoom.players.find(p => p.id === currentRoom.actionState.revealerId);
-            if (revealer && revealer.isBot) {
+            if (revealer) {
                 const idx = revealer.influence.findIndex(c => c.alive);
                 if (idx !== -1) processRevealCard(currentRoom, roomCode, revealer.id, idx);
             }
@@ -503,8 +505,9 @@ coupIo.on('connection', (socket) => {
                 return;
             }
 
-            if (action === 'INCOME') actor.coins += 1;
-            else if (action === 'FOREIGN_AID') {
+            if (action === 'INCOME') {
+                actor.coins += 1;
+            } else if (action === 'FOREIGN_AID') {
                 room.actionState = { type: 'FOREIGN_AID', actorId: actor.id, askedList: [], phase: 'WAIT_BLOCK' };
                 setNextBlocker(room, roomCode);
                 emitCoupUpdate(roomCode, room);
@@ -524,6 +527,16 @@ coupIo.on('connection', (socket) => {
                 actor.coins -= 7;
                 room.actionState = { type: 'COUP', actorId: actor.id, revealerId: target.id, phase: 'REVEAL_CARD' };
                 emitCoupUpdate(roomCode, room);
+                // 쿠 대상 카드 선택 30초 타이머 시작 및 리셋
+                startCoupTimer(room, roomCode, 30, () => {
+                    const currentRoom = coupRooms[roomCode];
+                    if (!currentRoom || !currentRoom.actionState || currentRoom.actionState.phase !== 'REVEAL_CARD') return;
+                    const revealer = currentRoom.players.find(p => p.id === currentRoom.actionState.revealerId);
+                    if (revealer) {
+                        const idx = revealer.influence.findIndex(c => c.alive);
+                        if (idx !== -1) processRevealCard(currentRoom, roomCode, revealer.id, idx);
+                    }
+                });
                 return;
             } else if (action === 'AMBASSADOR') {
                 const aliveCards = actor.influence.filter(c => c.alive).map(c => c.role);
@@ -558,11 +571,12 @@ coupIo.on('connection', (socket) => {
                     room.actionState.blockRole = blockRole || (room.actionState.type === 'ASSASSIN' ? '귀부인' : '사령관');
                     room.actionState.phase = 'WAIT_CHALLENGE';
                     emitCoupUpdate(roomCode, room);
-                    startCoupTimer(room, roomCode, 45, () => {
+                    // 도전 30초 타이머 시작 및 리셋
+                    startCoupTimer(room, roomCode, 30, () => {
                         const curRoom = coupRooms[roomCode];
                         if (!curRoom || !curRoom.actionState || curRoom.actionState.phase !== 'WAIT_CHALLENGE') return;
                         const actorP = curRoom.players.find(p => p.id === curRoom.actionState.actorId);
-                        if (actorP && actorP.isBot) {
+                        if (actorP) {
                             processChallengeResponse(curRoom, roomCode, actorP.id, false);
                         }
                     });
