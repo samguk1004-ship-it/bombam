@@ -663,7 +663,6 @@ coupIo.on('connection', (socket) => {
                     coins: 2, influence: [], isDead: false, connected: true
                 });
             } else {
-                // 🌟 [핵심 버그 수정 영역]: 기존 소켓 ID 백업 후, 게임 전체의 타겟 및 턴 ID를 새 소켓 ID로 싹 교체
                 const oldId = existingPlayer.id;
 
                 existingPlayer.id = socket.id;
@@ -674,7 +673,6 @@ coupIo.on('connection', (socket) => {
                     room.spectators = room.spectators.filter(s => s.userId !== userId);
                 }
 
-                // 방에 저장된 낡은 소켓 ID들을 새로운 소켓 ID로 모두 업데이트!
                 if (room.turnId === oldId) room.turnId = socket.id;
                 
                 if (room.actionState) {
@@ -691,6 +689,10 @@ coupIo.on('connection', (socket) => {
 
                 if (room.tempAmbassadorCards && room.tempAmbassadorCards.playerId === oldId) {
                     room.tempAmbassadorCards.playerId = socket.id;
+                }
+                
+                if(room.phase === 'GAME' && !existingPlayer.isDead) {
+                    coupIo.to(roomCode).emit('actionAnnounce', { actorName: '시스템', actionText: `${existingPlayer.name}님이 재접속했습니다.` });
                 }
             }
             emitCoupUpdate(roomCode, room);
@@ -963,6 +965,10 @@ coupIo.on('connection', (socket) => {
                             emitCoupUpdate(roomCode, room);
                         }
                     } else {
+                        // 🌟 게임 중 튕겼을 때 다른 사람 화면에도 즉각 표시되도록 수정
+                        coupIo.to(roomCode).emit('actionAnnounce', { actorName: '시스템', actionText: `${player.name}님의 연결이 끊겼습니다. (60초 후 퇴장)` });
+                        emitCoupUpdate(roomCode, room); 
+
                         coupDisconnectTimers[disconnectKey] = setTimeout(() => {
                             delete coupDisconnectTimers[disconnectKey];
                             const currentRoom = coupRooms[roomCode];
@@ -973,12 +979,14 @@ coupIo.on('connection', (socket) => {
                                 clearCoupTimer(currentRoom);
                                 delete coupRooms[roomCode];
                             } else {
+                                coupIo.to(roomCode).emit('actionAnnounce', { actorName: '시스템', actionText: `${player.name}님이 60초 경과로 강퇴되었습니다.` });
+                                
                                 if (currentRoom.turnId === player.id) {
                                     nextTurnCoup(currentRoom, roomCode);
                                 } else if (currentRoom.actionState && currentRoom.actionState.currentPromptId === player.id) {
                                     processBlockResponse(currentRoom, roomCode, player.id, false);
                                 }
-                                emitCoupUpdate(currentRoom, currentRoom);
+                                emitCoupUpdate(roomCode, currentRoom);
                             }
                         }, 60000);
                     }
