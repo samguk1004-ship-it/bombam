@@ -575,7 +575,7 @@ function processRevealCard(room, roomCode, revealerId, cardIndex) {
             isSuccess: false
         });
 
-        coupIo.to(roomCode).emit('actionAnnounce', { actorName: revealer.name, actionText: '자객이 아니므로 오픈된 카드가 다이(Die)합니다.' });
+        coupIo.to(roomCode).emit('actionAnnounce', { actorName: revealer.name, actionText: '거짓이군요. 모든패가 죽습니다.' });
         emitCoupUpdate(roomCode, room);
 
         setTimeout(() => {
@@ -597,7 +597,7 @@ function processRevealCard(room, roomCode, revealerId, cardIndex) {
                     isSuccess: false
                 });
 
-                coupIo.to(roomCode).emit('actionAnnounce', { actorName: currentRevealer.name, actionText: '자객이 아니었으므로 다음 카드도 오픈되며 다이(Die)합니다.' });
+                coupIo.to(roomCode).emit('actionAnnounce', { actorName: currentRevealer.name, actionText: '거짓이군요. 모든패가 죽습니다.' });
                 emitCoupUpdate(roomCode, currentRoom);
 
                 setTimeout(() => {
