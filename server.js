@@ -754,6 +754,11 @@ function processRevealCard(room, roomCode, revealerId, cardIndex) {
     const card = revealer.influence[cardIndex];
     if (!card || !card.alive) return;
 
+    // 🚀 버그 핵심 수정구간: 더블클릭 중복 실행 방지
+    // REVEAL_CARD 상태일 때만 동작하도록 잠가버려서, 애니메이션 도중에 중복 클릭으로 인한 두 번 실행(턴 스킵, 두 카드 겹침)을 원천 차단합니다.
+    if (room.actionState && room.actionState.phase !== 'REVEAL_CARD') return;
+    if (room.actionState) room.actionState.phase = 'REVEAL_ANIMATING';
+
     const actionType = room.actionState ? room.actionState.type : '';
     const actor = room.players.find(p => p.id === room.actionState.actorId);
     const actorName = actor ? actor.name : '';
@@ -821,6 +826,24 @@ function processRevealCard(room, roomCode, revealerId, cardIndex) {
                         emitCoupUpdate(roomCode, finalRoom);
                     }
                 }, 3000);
+            } else {
+                // 🚀 추가 버그 수정: 남은 카드가 1장인데 모두 죽어야 하는 상황에서 턴이 넘어가지 않던 버그 수정
+                currentRevealer.isDead = true;
+                setTimeout(() => {
+                    const finalRoom = coupRooms[roomCode];
+                    if (!finalRoom) return;
+                    const alivePlayers = finalRoom.players.filter(p => !p.isDead);
+                    if (alivePlayers.length <= 1) {
+                        finalRoom.phase = 'GAME_OVER';
+                        finalRoom.winner = alivePlayers[0]?.name || '생존자 없음';
+                        finalRoom.actionState = null;
+                        emitCoupUpdate(roomCode, finalRoom);
+                    } else {
+                        finalRoom.actionState = null;
+                        nextTurnCoup(finalRoom, roomCode);
+                        emitCoupUpdate(roomCode, finalRoom);
+                    }
+                }, 1500);
             }
         }, 1500);
         return;
@@ -915,10 +938,8 @@ function processRevealCard(room, roomCode, revealerId, cardIndex) {
         const currentActor = currentRoom.players.find(p => p.id === currentRoom.actionState?.actorId);
         const curActorName = currentActor ? currentActor.name : '';
 
-        // 🌟 수정된 공작 징세 증명 로직 🌟
         if (curActionType === 'DUKE_REVEAL') {
             if (isSuccess) {
-                // 공작 증명 성공
                 const matchedRole = currentCard.role;
                 currentRoom.deck.push(matchedRole);
                 currentRoom.deck.sort(() => Math.random() - 0.5);
@@ -930,7 +951,6 @@ function processRevealCard(room, roomCode, revealerId, cardIndex) {
                     currentActor.coins += 3;
                 }
                 
-                // 의심한 방해자에게 카드를 잃는 패널티(CHALLENGER_PENALTY) 부여
                 currentRoom.actionState = {
                     ...currentRoom.actionState,
                     phase: 'REVEAL_CARD',
@@ -942,6 +962,8 @@ function processRevealCard(room, roomCode, revealerId, cardIndex) {
                 startCoupTimer(currentRoom, roomCode, 30, () => {
                     const curR = coupRooms[roomCode];
                     if (!curR || !curR.actionState || curR.actionState.phase !== 'REVEAL_CARD') return;
+                    
+                    curR.actionState.phase = 'REVEAL_ANIMATING';
                     const rev = curR.players.find(p => p.id === curR.actionState.revealerId);
                     if (rev) {
                         const idx = rev.influence.findIndex(c => c.alive);
@@ -951,7 +973,6 @@ function processRevealCard(room, roomCode, revealerId, cardIndex) {
                 return;
 
             } else {
-                // 공작 증명 실패 (거짓말 들통)
                 currentCard.alive = false;
                 if (!currentRevealer.influence.some(c => c.alive)) currentRevealer.isDead = true;
                 
@@ -1009,18 +1030,19 @@ function processRevealCard(room, roomCode, revealerId, cardIndex) {
                 
                 coupIo.to(roomCode).emit('actionAnnounce', { actorName: curActorName, actionText: '도전에 실패하여 원조를 받지 못하고 패널티를 받습니다.' });
                 
-                // 🌟 원조 방해도 공작 증명 성공시 방해자가 패널티(CHALLENGER_PENALTY)를 받도록 수정
                 currentRoom.actionState = {
                     ...currentRoom.actionState,
                     phase: 'REVEAL_CARD',
                     type: 'CHALLENGER_PENALTY',
-                    revealerId: currentRoom.actionState.actorId // 원조를 요청한 사람(도전자)가 패널티 받음
+                    revealerId: currentRoom.actionState.actorId 
                 };
                 emitCoupUpdate(roomCode, currentRoom);
                 
                 startCoupTimer(currentRoom, roomCode, 30, () => {
                     const curR = coupRooms[roomCode];
                     if (!curR || !curR.actionState || curR.actionState.phase !== 'REVEAL_CARD') return;
+                    
+                    curR.actionState.phase = 'REVEAL_ANIMATING';
                     const rev = curR.players.find(p => p.id === curR.actionState.revealerId);
                     if (rev) {
                         const idx = rev.influence.findIndex(c => c.alive);
@@ -1066,6 +1088,8 @@ function processRevealCard(room, roomCode, revealerId, cardIndex) {
                     startCoupTimer(currentRoom, roomCode, 30, () => {
                         const curR = coupRooms[roomCode];
                         if (!curR || !curR.actionState || curR.actionState.phase !== 'REVEAL_CARD') return;
+                        
+                        curR.actionState.phase = 'REVEAL_ANIMATING';
                         const rev = curR.players.find(p => p.id === curR.actionState.revealerId);
                         if (rev) {
                             const idx = rev.influence.findIndex(c => c.alive);
@@ -1272,6 +1296,8 @@ coupIo.on('connection', (socket) => {
                 startCoupTimer(room, roomCode, 30, () => {
                     const currentRoom = coupRooms[roomCode];
                     if (!currentRoom || !currentRoom.actionState || currentRoom.actionState.phase !== 'REVEAL_CARD') return;
+                    
+                    currentRoom.actionState.phase = 'REVEAL_ANIMATING';
                     const revealer = currentRoom.players.find(p => p.id === currentRoom.actionState.revealerId);
                     if (revealer) {
                         const idx = revealer.influence.findIndex(c => c.alive);
@@ -1323,8 +1349,8 @@ coupIo.on('connection', (socket) => {
             if (!player || !room.tempAmbassadorCards) return;
 
             const allCards = room.tempAmbassadorCards.drawnCards;
-            const keptRoles = keepIndices.map(idx => allCards[idx]);
-            const returnedRoles = returnIndices.map(idx => allCards[idx]);
+            const keptRoles = keepIndices.map(idx => allCards[idx]).filter(Boolean);
+            const returnedRoles = returnIndices.map(idx => allCards[idx]).filter(Boolean);
 
             let keptIdx = 0;
             player.influence.forEach(c => {
@@ -1364,6 +1390,8 @@ coupIo.on('connection', (socket) => {
                         startCoupTimer(room, roomCode, 30, () => {
                             const curRoom = coupRooms[roomCode];
                             if (!curRoom || !curRoom.actionState || curRoom.actionState.phase !== 'REVEAL_CARD') return;
+                            
+                            curRoom.actionState.phase = 'REVEAL_ANIMATING';
                             const rev = curRoom.players.find(p => p.id === curRoom.actionState.revealerId);
                             if (rev) {
                                 const idx = rev.influence.findIndex(c => c.alive);
@@ -1406,7 +1434,11 @@ coupIo.on('connection', (socket) => {
     socket.on('revealCard', ({ roomCode, cardIndex }) => {
         try {
             const room = coupRooms[roomCode];
+            // 🚀 버그 핵심 수정구간: 중복 클릭 원천 차단
             if (!room || !room.actionState || room.actionState.phase !== 'REVEAL_CARD' || room.actionState.revealerId !== socket.id) return;
+            
+            // 신호가 들어오자마자 상태를 ANIMATING으로 변경하여 중복 신호를 무시하게 만듦
+            room.actionState.phase = 'REVEAL_ANIMATING';
             processRevealCard(room, roomCode, socket.id, cardIndex);
         } catch(e){}
     });
