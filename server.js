@@ -295,6 +295,14 @@ pokerIo.on('connection', (socket) => {
         try {
             const room = pokerRooms[roomCode];
             if (!room) return;
+
+            // 🚀 방장이고 봇이 포함된 방이면 폭파
+            if (room.players.length > 0 && room.players[0].id === socket.id && room.players.some(p => p.isBot)) {
+                pokerIo.to(roomCode).emit('roomDestroyed', { message: '방장이 퇴장하여 방이 폭파되었습니다.' });
+                delete pokerRooms[roomCode];
+                return;
+            }
+
             room.players = room.players.filter(p => p.id !== socket.id);
             socket.leave(roomCode);
             if (room.players.length === 0) delete pokerRooms[roomCode];
@@ -308,6 +316,13 @@ pokerIo.on('connection', (socket) => {
                 const room = pokerRooms[roomCode];
                 const playerIndex = room.players.findIndex(p => p.id === socket.id);
                 if (playerIndex !== -1) {
+                    // 🚀 방장이 튕겼고 봇이 포함된 방이면 폭파
+                    if (playerIndex === 0 && room.players.some(p => p.isBot)) {
+                        pokerIo.to(roomCode).emit('roomDestroyed', { message: '방장의 연결이 끊겨 방이 폭파되었습니다.' });
+                        delete pokerRooms[roomCode];
+                        continue;
+                    }
+
                     if (room.phase === 'LOBBY') {
                         room.players.splice(playerIndex, 1);
                         if (room.players.length === 0) delete pokerRooms[roomCode];
@@ -380,6 +395,14 @@ flip7Io.on('connection', (socket) => {
         try {
             const room = flip7Rooms[roomCode];
             if (!room) return;
+
+            // 🚀 방장이고 봇이 포함된 방이면 폭파
+            if (room.players.length > 0 && room.players[0].id === socket.id && room.players.some(p => p.isBot)) {
+                flip7Io.to(roomCode).emit('roomDestroyed', { message: '방장이 퇴장하여 방이 폭파되었습니다.' });
+                delete flip7Rooms[roomCode];
+                return;
+            }
+
             room.players = room.players.filter(p => p.id !== socket.id);
             socket.leave(roomCode);
             if (room.players.length === 0) delete flip7Rooms[roomCode];
@@ -393,6 +416,16 @@ flip7Io.on('connection', (socket) => {
                 const playerIndex = room.players.findIndex(p => p.id === socket.id);
                 if (playerIndex !== -1) {
                     const player = room.players[playerIndex];
+
+                    // 🚀 방장이 튕겼고 봇이 포함된 방이면 폭파
+                    if (playerIndex === 0 && room.players.some(p => p.isBot)) {
+                        flip7Io.to(roomCode).emit('roomDestroyed', { message: '방장의 연결이 끊겨 방이 폭파되었습니다.' });
+                        const disconnectKey = `${roomCode}_${player.userId}`;
+                        if (flip7DisconnectTimers[disconnectKey]) clearTimeout(flip7DisconnectTimers[disconnectKey]);
+                        delete flip7Rooms[roomCode];
+                        continue;
+                    }
+
                     player.connected = false;
                     const disconnectKey = `${roomCode}_${player.userId}`;
                     if (flip7DisconnectTimers[disconnectKey]) clearTimeout(flip7DisconnectTimers[disconnectKey]);
@@ -1357,6 +1390,15 @@ coupIo.on('connection', (socket) => {
         try {
             const room = coupRooms[roomCode];
             if (!room) return;
+
+            // 🚀 방장이고 봇이 포함된 방이면 폭파
+            if (room.players.length > 0 && room.players[0].id === socket.id && room.players.some(p => p.isBot)) {
+                coupIo.to(roomCode).emit('roomDestroyed', { message: '방장이 퇴장하여 방이 폭파되었습니다.' });
+                clearCoupTimer(room);
+                delete coupRooms[roomCode];
+                return;
+            }
+
             room.players = room.players.filter(p => p.id !== socket.id);
             if (room.spectators) room.spectators = room.spectators.filter(s => s.id !== socket.id);
             socket.leave(roomCode);
@@ -1378,8 +1420,20 @@ coupIo.on('connection', (socket) => {
                     room.spectators = room.spectators.filter(s => s.id !== socket.id);
                 }
 
-                const player = room.players.find(p => p.id === socket.id);
-                if (player) {
+                const playerIndex = room.players.findIndex(p => p.id === socket.id);
+                if (playerIndex !== -1) {
+                    const player = room.players[playerIndex];
+
+                    // 🚀 방장이 튕겼고 봇이 포함된 방이면 폭파
+                    if (playerIndex === 0 && room.players.some(p => p.isBot)) {
+                        coupIo.to(roomCode).emit('roomDestroyed', { message: '방장의 연결이 끊겨 방이 폭파되었습니다.' });
+                        const disconnectKey = `${roomCode}_${player.userId}`;
+                        if (coupDisconnectTimers[disconnectKey]) clearTimeout(coupDisconnectTimers[disconnectKey]);
+                        clearCoupTimer(room);
+                        delete coupRooms[roomCode];
+                        continue;
+                    }
+
                     player.connected = false;
                     const disconnectKey = `${roomCode}_${player.userId}`;
                     
