@@ -94,7 +94,7 @@ pokerIo.on('connection', (socket) => {
             let existingPlayer = room.players.find(p => (userId && p.userId === userId) || (userName && p.name === userName));
             
             if (!existingPlayer) {
-                if (room.phase !== 'LOBBY') return; // 게임 진행중엔 신규참여 관전처리 해야하지만 편의상 생략
+                if (room.phase !== 'LOBBY') return;
                 room.players.push({
                     id: socket.id, userId, name: userName, isBot,
                     ready: room.players.length === 0, score: 0, hand: [], penalties: [], handCount: 0, connected: true, isReconnecting: false
@@ -103,7 +103,7 @@ pokerIo.on('connection', (socket) => {
                 existingPlayer.id = socket.id;
                 existingPlayer.connected = true;
                 existingPlayer.isReconnecting = false;
-                room.paused = room.players.some(p => !p.connected); // 모두 들어오면 일시정지 해제
+                room.paused = room.players.some(p => !p.connected);
             }
             pokerIo.to(roomCode).emit('roomUpdate', room);
         } catch(e) {}
@@ -122,7 +122,6 @@ pokerIo.on('connection', (socket) => {
         } catch(e) {}
     });
 
-    // 🚀 복구된 게임 시작 로직
     socket.on('startGame', (roomCode) => {
         try {
             const room = pokerRooms[roomCode];
@@ -134,7 +133,6 @@ pokerIo.on('connection', (socket) => {
             
             const deck = createPokerDeck(room.players.length);
             
-            // 카드 분배
             let pIdx = 0;
             while(deck.length > 0) {
                 room.players[pIdx].hand.push(deck.pop());
@@ -147,14 +145,12 @@ pokerIo.on('connection', (socket) => {
                 p.lastClaim = null;
             });
 
-            // 랜덤 선 지정
             room.turnId = room.players[Math.floor(Math.random() * room.players.length)].id;
             
             pokerIo.to(roomCode).emit('gameStarted', room);
         } catch (e) {}
     });
 
-    // 🚀 복구된 공격(카드 건네기) 로직
     socket.on('submitOffer', ({ roomCode, targetId, card, claim }) => {
         try {
             const room = pokerRooms[roomCode];
@@ -163,7 +159,6 @@ pokerIo.on('connection', (socket) => {
             const player = room.players.find(p => p.id === socket.id);
             if (!player || room.turnId !== socket.id) return;
             
-            // 패에서 카드 제거
             player.hand = player.hand.filter(c => c.id !== card.id);
             player.handCount = player.hand.length;
             player.lastClaim = claim;
@@ -182,7 +177,6 @@ pokerIo.on('connection', (socket) => {
         } catch (e) {}
     });
 
-    // 🚀 복구된 넘기기 로직
     socket.on('submitPass', ({ roomCode, nextTargetId, newClaim }) => {
         try {
             const room = pokerRooms[roomCode];
@@ -201,7 +195,6 @@ pokerIo.on('connection', (socket) => {
         } catch (e) {}
     });
 
-    // 🚀 복구된 진실/거짓 판정 로직
     socket.on('resolveResponse', ({ roomCode, guessIsTrue }) => {
         try {
             const room = pokerRooms[roomCode];
@@ -218,7 +211,6 @@ pokerIo.on('connection', (socket) => {
             const guessCorrect = (guessIsTrue === actualClaimCorrect);
             const lastSenderId = offer.seenIds[offer.seenIds.length - 1];
             
-            // 맞추면 공격자가 패배, 틀리면 수비자가 패배
             const winnerId = guessCorrect ? socket.id : lastSenderId;
             const loserId = guessCorrect ? lastSenderId : socket.id;
             
@@ -233,7 +225,6 @@ pokerIo.on('connection', (socket) => {
             const winner = room.players.find(p => p.id === winnerId);
             const loser = room.players.find(p => p.id === loserId);
 
-            // 👑 왕카드 더블 페널티 룰렛 로직
             if (claim === '왕카드' && winner && winner.penalties && winner.penalties.length > 0) {
                 const extraIdx = Math.floor(Math.random() * winner.penalties.length);
                 const extraCard = winner.penalties.splice(extraIdx, 1)[0];
@@ -243,7 +234,6 @@ pokerIo.on('connection', (socket) => {
             room.phase = 'REVEAL';
             pokerIo.to(roomCode).emit('revealStart', room);
 
-            // 5초 뒤 결과 확정 및 다음 턴 진행
             setTimeout(() => {
                 const curRoom = pokerRooms[roomCode];
                 if (!curRoom || curRoom.phase !== 'REVEAL') return;
@@ -276,7 +266,7 @@ pokerIo.on('connection', (socket) => {
                     pokerIo.to(roomCode).emit('roomUpdate', curRoom);
                 } else {
                     curRoom.phase = 'GAME';
-                    curRoom.turnId = loserId; // 진 사람이 다음 선
+                    curRoom.turnId = loserId; 
                     curRoom.activeOffer = null;
                     pokerIo.to(roomCode).emit('roundResolved', curRoom);
                 }
@@ -285,8 +275,6 @@ pokerIo.on('connection', (socket) => {
     });
 
     socket.on('forceTurnSkip', ({ roomCode, targetId }) => {
-        // 프론트의 클라이언트 코드(handleTimeout)에서 자동으로 submitOffer/resolveResponse를 발생시키므로 
-        // 서버단에서는 상태 업데이트 통신만 열어둡니다.
         const room = pokerRooms[roomCode];
         if (room) pokerIo.to(roomCode).emit('roomUpdate', room);
     });
@@ -296,7 +284,6 @@ pokerIo.on('connection', (socket) => {
             const room = pokerRooms[roomCode];
             if (!room) return;
 
-            // 🚀 방장이고 봇이 포함된 방이면 폭파
             if (room.players.length > 0 && room.players[0].id === socket.id && room.players.some(p => p.isBot)) {
                 pokerIo.to(roomCode).emit('roomDestroyed', { message: '방장이 퇴장하여 방이 폭파되었습니다.' });
                 delete pokerRooms[roomCode];
@@ -316,7 +303,6 @@ pokerIo.on('connection', (socket) => {
                 const room = pokerRooms[roomCode];
                 const playerIndex = room.players.findIndex(p => p.id === socket.id);
                 if (playerIndex !== -1) {
-                    // 🚀 방장이 튕겼고 봇이 포함된 방이면 폭파
                     if (playerIndex === 0 && room.players.some(p => p.isBot)) {
                         pokerIo.to(roomCode).emit('roomDestroyed', { message: '방장의 연결이 끊겨 방이 폭파되었습니다.' });
                         delete pokerRooms[roomCode];
@@ -330,7 +316,7 @@ pokerIo.on('connection', (socket) => {
                     } else {
                         room.players[playerIndex].connected = false;
                         room.players[playerIndex].isReconnecting = true;
-                        room.paused = true; // 게임 중지
+                        room.paused = true; 
                         room.lastDisconnectTime = Date.now();
                         pokerIo.to(roomCode).emit('roomUpdate', room);
                     }
@@ -396,7 +382,6 @@ flip7Io.on('connection', (socket) => {
             const room = flip7Rooms[roomCode];
             if (!room) return;
 
-            // 🚀 방장이고 봇이 포함된 방이면 폭파
             if (room.players.length > 0 && room.players[0].id === socket.id && room.players.some(p => p.isBot)) {
                 flip7Io.to(roomCode).emit('roomDestroyed', { message: '방장이 퇴장하여 방이 폭파되었습니다.' });
                 delete flip7Rooms[roomCode];
@@ -417,7 +402,6 @@ flip7Io.on('connection', (socket) => {
                 if (playerIndex !== -1) {
                     const player = room.players[playerIndex];
 
-                    // 🚀 방장이 튕겼고 봇이 포함된 방이면 폭파
                     if (playerIndex === 0 && room.players.some(p => p.isBot)) {
                         flip7Io.to(roomCode).emit('roomDestroyed', { message: '방장의 연결이 끊겨 방이 폭파되었습니다.' });
                         const disconnectKey = `${roomCode}_${player.userId}`;
@@ -931,35 +915,60 @@ function processRevealCard(room, roomCode, revealerId, cardIndex) {
         const currentActor = currentRoom.players.find(p => p.id === currentRoom.actionState?.actorId);
         const curActorName = currentActor ? currentActor.name : '';
 
+        // 🌟 수정된 공작 징세 증명 로직 🌟
         if (curActionType === 'DUKE_REVEAL') {
             if (isSuccess) {
+                // 공작 증명 성공
                 const matchedRole = currentCard.role;
                 currentRoom.deck.push(matchedRole);
                 currentRoom.deck.sort(() => Math.random() - 0.5);
                 currentCard.role = currentRoom.deck.pop();
                 
-                coupIo.to(roomCode).emit('actionAnnounce', { actorName: curActorName, actionText: '공작을 확인시켜 징세(+3코인)를 획득했습니다.' });
+                coupIo.to(roomCode).emit('actionAnnounce', { actorName: curActorName, actionText: '공작을 증명하여 징세(+3코인)를 획득하고, 방해자는 패널티를 받습니다!' });
+                
                 if (currentActor && !currentActor.isDead) {
                     currentActor.coins += 3;
                 }
+                
+                // 의심한 방해자에게 카드를 잃는 패널티(CHALLENGER_PENALTY) 부여
+                currentRoom.actionState = {
+                    ...currentRoom.actionState,
+                    phase: 'REVEAL_CARD',
+                    type: 'CHALLENGER_PENALTY',
+                    revealerId: currentRoom.actionState.blockerId 
+                };
+                emitCoupUpdate(roomCode, currentRoom);
+                
+                startCoupTimer(currentRoom, roomCode, 30, () => {
+                    const curR = coupRooms[roomCode];
+                    if (!curR || !curR.actionState || curR.actionState.phase !== 'REVEAL_CARD') return;
+                    const rev = curR.players.find(p => p.id === curR.actionState.revealerId);
+                    if (rev) {
+                        const idx = rev.influence.findIndex(c => c.alive);
+                        if (idx !== -1) processRevealCard(curR, roomCode, rev.id, idx);
+                    }
+                });
+                return;
+
             } else {
+                // 공작 증명 실패 (거짓말 들통)
                 currentCard.alive = false;
                 if (!currentRevealer.influence.some(c => c.alive)) currentRevealer.isDead = true;
                 
                 coupIo.to(roomCode).emit('actionAnnounce', { actorName: curActorName, actionText: '공작이 아니므로 카드를 잃고 징세에 실패했습니다.' });
+                
+                const alivePlayers = currentRoom.players.filter(p => !p.isDead);
+                if (alivePlayers.length <= 1) {
+                    currentRoom.phase = 'GAME_OVER';
+                    currentRoom.winner = alivePlayers[0]?.name || '생존자 없음';
+                    emitCoupUpdate(roomCode, currentRoom);
+                } else {
+                    currentRoom.actionState = null;
+                    nextTurnCoup(currentRoom, roomCode);
+                    emitCoupUpdate(roomCode, currentRoom);
+                }
+                return;
             }
-
-            const alivePlayers = currentRoom.players.filter(p => !p.isDead);
-            if (alivePlayers.length <= 1) {
-                currentRoom.phase = 'GAME_OVER';
-                currentRoom.winner = alivePlayers[0]?.name || '생존자 없음';
-                emitCoupUpdate(roomCode, currentRoom);
-            } else {
-                currentRoom.actionState = null;
-                nextTurnCoup(currentRoom, roomCode);
-                emitCoupUpdate(roomCode, currentRoom);
-            }
-            return;
         }
 
         if (curActionType === 'COUP' || curActionType === 'ASSASSIN_DEATH' || curActionType === 'ASSASSIN_ATTACKER_DEATH' || curActionType === 'CHALLENGER_PENALTY' || curActionType === 'ASSASSIN_FAIL_PENALTY') {
@@ -998,12 +1007,28 @@ function processRevealCard(room, roomCode, revealerId, cardIndex) {
                 currentRoom.deck.sort(() => Math.random() - 0.5);
                 currentCard.role = currentRoom.deck.pop();
                 
-                coupIo.to(roomCode).emit('actionAnnounce', { actorName: curActorName, actionText: '도전에 실패하여 원조를 받지 못합니다.' });
+                coupIo.to(roomCode).emit('actionAnnounce', { actorName: curActorName, actionText: '도전에 실패하여 원조를 받지 못하고 패널티를 받습니다.' });
                 
-                currentRoom.actionState = null;
-                nextTurnCoup(currentRoom, roomCode);
+                // 🌟 원조 방해도 공작 증명 성공시 방해자가 패널티(CHALLENGER_PENALTY)를 받도록 수정
+                currentRoom.actionState = {
+                    ...currentRoom.actionState,
+                    phase: 'REVEAL_CARD',
+                    type: 'CHALLENGER_PENALTY',
+                    revealerId: currentRoom.actionState.actorId // 원조를 요청한 사람(도전자)가 패널티 받음
+                };
                 emitCoupUpdate(roomCode, currentRoom);
+                
+                startCoupTimer(currentRoom, roomCode, 30, () => {
+                    const curR = coupRooms[roomCode];
+                    if (!curR || !curR.actionState || curR.actionState.phase !== 'REVEAL_CARD') return;
+                    const rev = curR.players.find(p => p.id === curR.actionState.revealerId);
+                    if (rev) {
+                        const idx = rev.influence.findIndex(c => c.alive);
+                        if (idx !== -1) processRevealCard(curR, roomCode, rev.id, idx);
+                    }
+                });
                 return;
+
             } else {
                 currentCard.alive = false;
                 if (!currentRevealer.influence.some(c => c.alive)) currentRevealer.isDead = true;
@@ -1391,7 +1416,6 @@ coupIo.on('connection', (socket) => {
             const room = coupRooms[roomCode];
             if (!room) return;
 
-            // 🚀 방장이고 봇이 포함된 방이면 폭파
             if (room.players.length > 0 && room.players[0].id === socket.id && room.players.some(p => p.isBot)) {
                 coupIo.to(roomCode).emit('roomDestroyed', { message: '방장이 퇴장하여 방이 폭파되었습니다.' });
                 clearCoupTimer(room);
@@ -1424,7 +1448,6 @@ coupIo.on('connection', (socket) => {
                 if (playerIndex !== -1) {
                     const player = room.players[playerIndex];
 
-                    // 🚀 방장이 튕겼고 봇이 포함된 방이면 폭파
                     if (playerIndex === 0 && room.players.some(p => p.isBot)) {
                         coupIo.to(roomCode).emit('roomDestroyed', { message: '방장의 연결이 끊겨 방이 폭파되었습니다.' });
                         const disconnectKey = `${roomCode}_${player.userId}`;
