@@ -68,26 +68,146 @@ pokerIo.on('connection', (socket) => {
 // ==========================================
 const flip7Io = io.of('/flip7');
 const flip7Rooms = {};
+const flip7DisconnectTimers = {}; // 🔥 플립7 재접속 60초 타이머 관리 객체
 
 flip7Io.on('connection', (socket) => {
     socket.on('pingHeartbeat', () => { socket.emit('pongHeartbeat'); });
+    
     socket.on('joinRoom', ({ roomCode, userName, userId, isBot }) => {
         try {
             socket.join(roomCode);
             if (!flip7Rooms[roomCode]) flip7Rooms[roomCode] = { roomCode, phase: 'LOBBY', players: [], timers: {} };
             const room = flip7Rooms[roomCode];
+            
+            // 기존 튕김 타이머가 있다면 취소 (재접속 성공)
+            const disconnectKey = `${roomCode}_${userId}`;
+            if (flip7DisconnectTimers[disconnectKey]) {
+                clearTimeout(flip7DisconnectTimers[disconnectKey]);
+                delete flip7DisconnectTimers[disconnectKey];
+            }
+
             let existingPlayer = room.players.find(p => (userId && p.userId === userId) || (userName && p.name === userName));
+            
             if (!existingPlayer) {
-                room.players.push({ id: socket.id, userId, name: userName, isBot, ready: room.players.length === 0, score: 0, connected: true });
+                // 게임 중 난입 시 관전자로 추가
+                const isSpectator = room.phase !== 'LOBBY';
+                room.players.push({ 
+                    id: socket.id, 
+                    userId, 
+                    name: userName, 
+                    isBot, 
+                    ready: room.players.length === 0, 
+                    score: 0, 
+                    connected: true,
+                    isSpectator 
+                });
             } else {
                 existingPlayer.id = socket.id;
                 existingPlayer.connected = true;
+                // 재접속 사실을 다른 유저들에게 알림
+                socket.to(roomCode).emit('playerReconnected', { id: socket.id });
             }
             flip7Io.to(roomCode).emit('roomUpdate', room);
         } catch(e) {}
     });
-    socket.on('leaveRoom', (roomCode) => {});
-    socket.on('disconnect', () => {});
+
+    // 🔥 준비 상태 변경 시 룸 전체에 브로드캐스트
+    socket.on('playerReady', ({ roomCode, ready }) => {
+        try {
+            const room = flip7Rooms[roomCode];
+            if (room) {
+                const player = room.players.find(p => p.id === socket.id);
+                if (player) { 
+                    player.ready = ready; 
+                    flip7Io.to(roomCode).emit('roomUpdate', room); 
+                }
+            }
+        } catch(e) {}
+    });
+
+    // 🔥 게임 시작
+    socket.on('startGame', (roomCode) => {
+        try {
+            const room = flip7Rooms[roomCode];
+            if (room) {
+                room.phase = 'GAME';
+                flip7Io.to(roomCode).emit('gameStarted', room);
+            }
+        } catch(e) {}
+    });
+
+    // 🔥 게임 상태 실시간 동기화 (방장 -> 유저)
+    socket.on('sendGameStateSync', ({ roomCode, gameState }) => {
+        try {
+            socket.to(roomCode).emit('updateGameStateSync', gameState);
+        } catch(e) {}
+    });
+
+    // 🔥 게임 상태 요청 (유저 -> 방장)
+    socket.on('requestSyncFromOthers', (roomCode) => {
+        try {
+            socket.to(roomCode).emit('provideGameState');
+        } catch(e) {}
+    });
+
+    socket.on('leaveRoom', (roomCode) => {
+        try {
+            const room = flip7Rooms[roomCode];
+            if (!room) return;
+            room.players = room.players.filter(p => p.id !== socket.id);
+            socket.leave(roomCode);
+            if (room.players.length === 0) {
+                delete flip7Rooms[roomCode];
+            } else {
+                flip7Io.to(roomCode).emit('roomUpdate', room);
+            }
+        } catch(e) {}
+    });
+
+    socket.on('disconnect', () => {
+        try {
+            for (let roomCode in flip7Rooms) {
+                const room = flip7Rooms[roomCode];
+                const playerIndex = room.players.findIndex(p => p.id === socket.id);
+                
+                if (playerIndex !== -1) {
+                    const player = room.players[playerIndex];
+                    player.connected = false;
+                    
+                    const disconnectKey = `${roomCode}_${player.userId}`;
+                    if (flip7DisconnectTimers[disconnectKey]) clearTimeout(flip7DisconnectTimers[disconnectKey]);
+                    
+                    if (room.phase === 'LOBBY') {
+                        // 대기방에서는 즉시 퇴장 처리
+                        room.players.splice(playerIndex, 1);
+                        if (room.players.length === 0) {
+                            delete flip7Rooms[roomCode];
+                        } else {
+                            flip7Io.to(roomCode).emit('roomUpdate', room);
+                        }
+                    } else {
+                        // 🔥 게임 중에는 60초 대기 오버레이 트리거
+                        flip7Io.to(roomCode).emit('playerDisconnected', { id: player.id, name: player.name });
+                        
+                        flip7DisconnectTimers[disconnectKey] = setTimeout(() => {
+                            delete flip7DisconnectTimers[disconnectKey];
+                            const currentRoom = flip7Rooms[roomCode];
+                            if (!currentRoom) return;
+                            
+                            // 60초 후에도 안 돌아오면 영구 강퇴
+                            currentRoom.players = currentRoom.players.filter(p => p.userId !== player.userId);
+                            if (currentRoom.players.length === 0) {
+                                delete flip7Rooms[roomCode];
+                            } else {
+                                flip7Io.to(roomCode).emit('playerKicked', { userId: player.userId, name: player.name });
+                                flip7Io.to(roomCode).emit('roomUpdate', currentRoom);
+                            }
+                        }, 60000);
+                    }
+                }
+            }
+        } catch(e) {}
+    });
 });
 
 // ==========================================
