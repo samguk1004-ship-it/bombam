@@ -76,8 +76,54 @@ pokerIo.on('connection', (socket) => {
             pokerIo.to(roomCode).emit('roomUpdate', room);
         } catch(e) {}
     });
-    socket.on('leaveRoom', (roomCode) => {});
-    socket.on('disconnect', () => {});
+
+    // 🚀 [버그 픽스] 누락되어 있던 준비완료 신호 처리 로직 추가
+    socket.on('playerReady', ({ roomCode, ready }) => {
+        try {
+            const room = pokerRooms[roomCode];
+            if (room) {
+                const player = room.players.find(p => p.id === socket.id);
+                if (player) {
+                    player.ready = ready;
+                    pokerIo.to(roomCode).emit('roomUpdate', room);
+                }
+            }
+        } catch(e) {}
+    });
+
+    // 🚀 [버그 픽스] 방 나가기 및 연결 끊김 시 인원 정리 로직 추가 (봇 새로고침 시 필수)
+    socket.on('leaveRoom', (roomCode) => {
+        try {
+            const room = pokerRooms[roomCode];
+            if (!room) return;
+            room.players = room.players.filter(p => p.id !== socket.id);
+            socket.leave(roomCode);
+            if (room.players.length === 0) delete pokerRooms[roomCode];
+            else pokerIo.to(roomCode).emit('roomUpdate', room);
+        } catch(e) {}
+    });
+
+    socket.on('disconnect', () => {
+        try {
+            for (let roomCode in pokerRooms) {
+                const room = pokerRooms[roomCode];
+                const playerIndex = room.players.findIndex(p => p.id === socket.id);
+                if (playerIndex !== -1) {
+                    if (room.phase === 'LOBBY') {
+                        room.players.splice(playerIndex, 1);
+                        if (room.players.length === 0) delete pokerRooms[roomCode];
+                        else pokerIo.to(roomCode).emit('roomUpdate', room);
+                    } else {
+                        room.players[playerIndex].connected = false;
+                        pokerIo.to(roomCode).emit('roomUpdate', room);
+                    }
+                }
+            }
+        } catch(e) {}
+    });
+
+    // ⚠️ 참고: 만약 보내주신 파일 원본에서 'startGame' 등의 인게임 처리 로직이 생략(Truncated)된 채로 
+    // 질문에 올려주셨던 것이라면 해당 인게임 로직 코드들은 이 아래에 그대로 유지되어야 합니다.
 });
 
 // ==========================================
@@ -509,7 +555,6 @@ function processRevealCard(room, roomCode, revealerId, cardIndex) {
         isFailPenaltyMatch = (card.role === '자객');
     }
 
-    // 1. 방어자(귀부인 주장)가 암살 도전받았으나 거짓이었을 경우 (방어자 사망)
     if (actionType === 'ASSASSIN_BLOCK_CHALLENGE' && !isSuccess) {
         card.alive = false;
         coupIo.to(roomCode).emit('blockRevealAnimation', {
@@ -565,7 +610,6 @@ function processRevealCard(room, roomCode, revealerId, cardIndex) {
         return;
     }
 
-    // 2. 암살자가 귀부인 방어에 막혀서 자객을 증명하려 했으나 거짓이었을 경우 (암살자 2장 사망)
     if (actionType === 'ASSASSIN_FAIL_PENALTY' && !isFailPenaltyMatch) {
         card.alive = false;
         coupIo.to(roomCode).emit('blockRevealAnimation', {
@@ -637,7 +681,6 @@ function processRevealCard(room, roomCode, revealerId, cardIndex) {
         return;
     }
 
-    // 3. 그 외의 정상 처리 및 애니메이션 실행 (자객 증명 성공 시 isSuccess가 false로 들어가서 덱에 섞이지 않고 Die 됨)
     coupIo.to(roomCode).emit('blockRevealAnimation', {
         revealerId: revealer.id,
         cardIndex: cardIndex,
@@ -656,7 +699,6 @@ function processRevealCard(room, roomCode, revealerId, cardIndex) {
         const currentActor = currentRoom.players.find(p => p.id === currentRoom.actionState?.actorId);
         const curActorName = currentActor ? currentActor.name : '';
 
-        // 징세 카드 오픈 결과
         if (curActionType === 'DUKE_REVEAL') {
             if (isSuccess) {
                 const matchedRole = currentCard.role;
@@ -688,7 +730,6 @@ function processRevealCard(room, roomCode, revealerId, cardIndex) {
             return;
         }
 
-        // 단순 사망(버릴패) 및 자객 증명 성공 시 단일 다이 처리
         if (curActionType === 'COUP' || curActionType === 'ASSASSIN_DEATH' || curActionType === 'ASSASSIN_ATTACKER_DEATH' || curActionType === 'CHALLENGER_PENALTY' || curActionType === 'ASSASSIN_FAIL_PENALTY') {
             currentCard.alive = false;
             
@@ -752,7 +793,7 @@ function processRevealCard(room, roomCode, revealerId, cardIndex) {
                 
                 if (curActionType === 'ASSASSIN_BLOCK_CHALLENGE') {
                     text = '귀부인으로 암살 방어에 성공하여 도전자에게 자객 증명(반격)을 요구합니다.';
-                    penaltyType = 'ASSASSIN_FAIL_PENALTY'; // 자객 증명 벌칙으로 연결
+                    penaltyType = 'ASSASSIN_FAIL_PENALTY'; 
                 }
                 
                 coupIo.to(roomCode).emit('actionAnnounce', { actorName: currentRevealer.name, actionText: text });
