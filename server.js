@@ -710,7 +710,7 @@ function processRevealCard(room, roomCode, revealerId, cardIndex) {
                 } else if (curActionType === 'ASSASSIN_ATTACKER_DEATH') {
                     coupIo.to(roomCode).emit('actionAnnounce', { actorName: curActorName, actionText: '암살 실패로 카드를 잃었습니다.' });
                 } else if (curActionType === 'ASSASSIN_FAIL_PENALTY') {
-                    coupIo.to(roomCode).emit('actionAnnounce', { actorName: curRevealerName, actionText: '자객 카드를 확인시켜 해당 자객 카드만 다이(Die)합니다.' });
+                    coupIo.to(roomCode).emit('actionAnnounce', { actorName: curRevealerName, actionText: '자객이 있으니 자객 카드만 잃습니다.' });
                 }
                 
                 currentRoom.actionState = null;
