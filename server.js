@@ -553,8 +553,11 @@ function processChallengeResponse(room, roomCode, playerId, challenge) {
                 }
             });
         } else { 
-            let msg = room.actionState.type === 'DUKE' ? '징세를 포기하여 징세에 실패했습니다.' : '카드교환에 실패하였습니다.';
-            coupIo.to(roomCode).emit('actionAnnounce', { actorName: actorName, actionText: msg });
+            if (room.actionState.type === 'DUKE') {
+                coupIo.to(roomCode).emit('actionAnnounce', { actorName: actorName, actionText: '징세를 포기하여 징세에 실패했습니다.' });
+            } else {
+                coupIo.to(roomCode).emit('actionAnnounce', { actorName: '시스템', actionText: `${actorName}${getJosa(actorName, '이/가')} 교환에 실패했습니다.` });
+            }
             room.actionState = null;
             nextTurnCoup(room, roomCode);
             emitCoupUpdate(roomCode, room);
@@ -1071,6 +1074,7 @@ coupIo.on('connection', (socket) => {
             } else if (action === 'AMBASSADOR') {
                 // 외교관 교환 역시 먼저 모두에게 의심(WAIT_BLOCK)을 거치도록 수정
                 room.actionState = { type: 'AMBASSADOR', actorId: actor.id, askedList: [], phase: 'WAIT_BLOCK' };
+                coupIo.to(roomCode).emit('actionAnnounce', { actorName: actor.name, actionText: '카드를 교환합니다.' });
                 setNextBlocker(room, roomCode);
                 return;
             } else if (action === 'ASSASSIN' && target) {
