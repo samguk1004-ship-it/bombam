@@ -519,7 +519,7 @@ function processRevealCard(room, roomCode, revealerId, cardIndex) {
             isSuccess: false
         });
 
-        coupIo.to(roomCode).emit('actionAnnounce', { actorName: revealer.name, actionText: '패배하여 버릴 카드를 선택해야 합니다.' });
+        coupIo.to(roomCode).emit('actionAnnounce', { actorName: revealer.name, actionText: '거짓이군요. 모든패가 죽습니다.' });
         emitCoupUpdate(roomCode, room);
 
         setTimeout(() => {
@@ -541,7 +541,7 @@ function processRevealCard(room, roomCode, revealerId, cardIndex) {
                     isSuccess: false
                 });
 
-                coupIo.to(roomCode).emit('actionAnnounce', { actorName: currentRevealer.name, actionText: '패배하여 버릴 카드를 선택해야 합니다.' });
+                coupIo.to(roomCode).emit('actionAnnounce', { actorName: currentRevealer.name, actionText: '거짓이군요. 모든패가 죽습니다.' });
                 emitCoupUpdate(roomCode, currentRoom);
 
                 setTimeout(() => {
