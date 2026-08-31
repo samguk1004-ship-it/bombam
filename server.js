@@ -32,6 +32,7 @@ const io = new Server(server, {
     allowEIO3: true
 });
 
+// --- 유틸리티 함수 ---
 function getJosa(word, josa) {
     if (!word) return '';
     const lastChar = word.charCodeAt(word.length - 1);
@@ -48,6 +49,49 @@ function getJosa(word, josa) {
 
 function appendJosa(word, josa) {
     return word + getJosa(word, josa);
+}
+
+// 🚀 메모리 누수 방지용 중앙 타이머 관리자
+const TimerHelper = {
+    add: (room, callback, delay) => {
+        if (!room.timeouts) room.timeouts = new Set();
+        const timer = setTimeout(() => {
+            if (room.timeouts) room.timeouts.delete(timer);
+            callback();
+        }, delay);
+        room.timeouts.add(timer);
+        return timer;
+    },
+    clearAll: (room) => {
+        if (room.timer && room.timer.timeoutId) {
+            clearTimeout(room.timer.timeoutId);
+            room.timer.timeoutId = null;
+        }
+        if (room.timeouts) {
+            room.timeouts.forEach(t => clearTimeout(t));
+            room.timeouts.clear();
+        }
+    }
+};
+
+// 🚀 공통 방 폭파(Destroy) 관리 함수
+function destroyRoom(roomsObj, disconnectTimers, roomCode, ioNamespace, message) {
+    const room = roomsObj[roomCode];
+    if (!room) return;
+    
+    TimerHelper.clearAll(room); // 모든 비동기 타이머 해제
+
+    if (disconnectTimers) {
+        Object.keys(disconnectTimers).forEach(key => {
+            if (key.startsWith(`${roomCode}_`)) {
+                clearTimeout(disconnectTimers[key]);
+                delete disconnectTimers[key];
+            }
+        });
+    }
+
+    if (message) ioNamespace.to(roomCode).emit('roomDestroyed', { message });
+    delete roomsObj[roomCode];
 }
 
 // ==========================================
@@ -89,7 +133,7 @@ pokerIo.on('connection', (socket) => {
     socket.on('joinRoom', ({ roomCode, userName, userId, isBot }) => {
         try {
             socket.join(roomCode);
-            if (!pokerRooms[roomCode]) pokerRooms[roomCode] = { roomCode, phase: 'LOBBY', players: [], spectators: [], timers: {}, paused: false };
+            if (!pokerRooms[roomCode]) pokerRooms[roomCode] = { roomCode, phase: 'LOBBY', players: [], spectators: [], timeouts: new Set(), paused: false };
             const room = pokerRooms[roomCode];
             let existingPlayer = room.players.find(p => (userId && p.userId === userId) || (userName && p.name === userName));
             
@@ -106,7 +150,7 @@ pokerIo.on('connection', (socket) => {
                 room.paused = room.players.some(p => !p.connected);
             }
             pokerIo.to(roomCode).emit('roomUpdate', room);
-        } catch(e) {}
+        } catch(e) { console.error('Poker joinRoom error:', e); }
     });
 
     socket.on('playerReady', ({ roomCode, ready }) => {
@@ -119,7 +163,7 @@ pokerIo.on('connection', (socket) => {
                     pokerIo.to(roomCode).emit('roomUpdate', room);
                 }
             }
-        } catch(e) {}
+        } catch(e) { console.error('Poker playerReady error:', e); }
     });
 
     socket.on('startGame', (roomCode) => {
@@ -146,9 +190,8 @@ pokerIo.on('connection', (socket) => {
             });
 
             room.turnId = room.players[Math.floor(Math.random() * room.players.length)].id;
-            
             pokerIo.to(roomCode).emit('gameStarted', room);
-        } catch (e) {}
+        } catch (e) { console.error('Poker startGame error:', e); }
     });
 
     socket.on('submitOffer', ({ roomCode, targetId, card, claim }) => {
@@ -164,17 +207,12 @@ pokerIo.on('connection', (socket) => {
             player.lastClaim = claim;
 
             room.activeOffer = {
-                attackerId: socket.id,
-                senderId: socket.id,
-                targetId: targetId,
-                receiverId: targetId,
-                card: card,
-                claim: claim,
-                seenIds: [socket.id]
+                attackerId: socket.id, senderId: socket.id, targetId: targetId, receiverId: targetId,
+                card: card, claim: claim, seenIds: [socket.id]
             };
             room.phase = 'RESPONSE';
             pokerIo.to(roomCode).emit('onOffer', room);
-        } catch (e) {}
+        } catch (e) { console.error('Poker submitOffer error:', e); }
     });
 
     socket.on('submitPass', ({ roomCode, nextTargetId, newClaim }) => {
@@ -192,7 +230,7 @@ pokerIo.on('connection', (socket) => {
             room.activeOffer.claim = newClaim;
             
             pokerIo.to(roomCode).emit('onOffer', room);
-        } catch (e) {}
+        } catch (e) { console.error('Poker submitPass error:', e); }
     });
 
     socket.on('resolveResponse', ({ roomCode, guessIsTrue }) => {
@@ -214,17 +252,9 @@ pokerIo.on('connection', (socket) => {
             const winnerId = guessCorrect ? socket.id : lastSenderId;
             const loserId = guessCorrect ? lastSenderId : socket.id;
             
-            room.revealData = {
-                winnerId,
-                penaltyId: loserId,
-                guessCorrect,
-                actualCard: card,
-                claim
-            };
+            room.revealData = { winnerId, penaltyId: loserId, guessCorrect, actualCard: card, claim };
 
             const winner = room.players.find(p => p.id === winnerId);
-            const loser = room.players.find(p => p.id === loserId);
-
             if (claim === '왕카드' && winner && winner.penalties && winner.penalties.length > 0) {
                 const extraIdx = Math.floor(Math.random() * winner.penalties.length);
                 const extraCard = winner.penalties.splice(extraIdx, 1)[0];
@@ -234,7 +264,8 @@ pokerIo.on('connection', (socket) => {
             room.phase = 'REVEAL';
             pokerIo.to(roomCode).emit('revealStart', room);
 
-            setTimeout(() => {
+            // 🚀 TimerHelper로 교체 (누수 방지)
+            TimerHelper.add(room, () => {
                 const curRoom = pokerRooms[roomCode];
                 if (!curRoom || curRoom.phase !== 'REVEAL') return;
                 
@@ -271,10 +302,10 @@ pokerIo.on('connection', (socket) => {
                     pokerIo.to(roomCode).emit('roundResolved', curRoom);
                 }
             }, 5000);
-        } catch (e) {}
+        } catch (e) { console.error('Poker resolveResponse error:', e); }
     });
 
-    socket.on('forceTurnSkip', ({ roomCode, targetId }) => {
+    socket.on('forceTurnSkip', ({ roomCode }) => {
         const room = pokerRooms[roomCode];
         if (room) pokerIo.to(roomCode).emit('roomUpdate', room);
     });
@@ -285,16 +316,16 @@ pokerIo.on('connection', (socket) => {
             if (!room) return;
 
             if (room.players.length > 0 && room.players[0].id === socket.id && room.players.some(p => p.isBot)) {
-                pokerIo.to(roomCode).emit('roomDestroyed', { message: '방장이 퇴장하여 방이 폭파되었습니다.' });
-                delete pokerRooms[roomCode];
+                destroyRoom(pokerRooms, null, roomCode, pokerIo, '방장이 퇴장하여 방이 폭파되었습니다.');
                 return;
             }
 
             room.players = room.players.filter(p => p.id !== socket.id);
             socket.leave(roomCode);
-            if (room.players.length === 0) delete pokerRooms[roomCode];
+            
+            if (room.players.length === 0) destroyRoom(pokerRooms, null, roomCode, pokerIo);
             else pokerIo.to(roomCode).emit('roomUpdate', room);
-        } catch(e) {}
+        } catch(e) { console.error('Poker leaveRoom error:', e); }
     });
 
     socket.on('disconnect', () => {
@@ -302,16 +333,16 @@ pokerIo.on('connection', (socket) => {
             for (let roomCode in pokerRooms) {
                 const room = pokerRooms[roomCode];
                 const playerIndex = room.players.findIndex(p => p.id === socket.id);
+                
                 if (playerIndex !== -1) {
                     if (playerIndex === 0 && room.players.some(p => p.isBot)) {
-                        pokerIo.to(roomCode).emit('roomDestroyed', { message: '방장의 연결이 끊겨 방이 폭파되었습니다.' });
-                        delete pokerRooms[roomCode];
+                        destroyRoom(pokerRooms, null, roomCode, pokerIo, '방장의 연결이 끊겨 방이 폭파되었습니다.');
                         continue;
                     }
 
                     if (room.phase === 'LOBBY') {
                         room.players.splice(playerIndex, 1);
-                        if (room.players.length === 0) delete pokerRooms[roomCode];
+                        if (room.players.length === 0) destroyRoom(pokerRooms, null, roomCode, pokerIo);
                         else pokerIo.to(roomCode).emit('roomUpdate', room);
                     } else {
                         room.players[playerIndex].connected = false;
@@ -322,7 +353,7 @@ pokerIo.on('connection', (socket) => {
                     }
                 }
             }
-        } catch(e) {}
+        } catch(e) { console.error('Poker disconnect error:', e); }
     });
 });
 
@@ -338,13 +369,15 @@ flip7Io.on('connection', (socket) => {
     socket.on('joinRoom', ({ roomCode, userName, userId, isBot }) => {
         try {
             socket.join(roomCode);
-            if (!flip7Rooms[roomCode]) flip7Rooms[roomCode] = { roomCode, phase: 'LOBBY', players: [], timers: {} };
+            if (!flip7Rooms[roomCode]) flip7Rooms[roomCode] = { roomCode, phase: 'LOBBY', players: [], timeouts: new Set() };
             const room = flip7Rooms[roomCode];
+            
             const disconnectKey = `${roomCode}_${userId}`;
             if (flip7DisconnectTimers[disconnectKey]) {
                 clearTimeout(flip7DisconnectTimers[disconnectKey]);
                 delete flip7DisconnectTimers[disconnectKey];
             }
+            
             let existingPlayer = room.players.find(p => (userId && p.userId === userId) || (userName && p.name === userName));
             if (!existingPlayer) {
                 const isSpectator = room.phase !== 'LOBBY';
@@ -354,8 +387,9 @@ flip7Io.on('connection', (socket) => {
                 socket.to(roomCode).emit('playerReconnected', { id: socket.id });
             }
             flip7Io.to(roomCode).emit('roomUpdate', room);
-        } catch(e) {}
+        } catch(e) { console.error('Flip7 joinRoom error:', e); }
     });
+    
     socket.on('playerReady', ({ roomCode, ready }) => {
         try {
             const room = flip7Rooms[roomCode];
@@ -363,37 +397,41 @@ flip7Io.on('connection', (socket) => {
                 const player = room.players.find(p => p.id === socket.id);
                 if (player) { player.ready = ready; flip7Io.to(roomCode).emit('roomUpdate', room); }
             }
-        } catch(e) {}
+        } catch(e) { console.error('Flip7 playerReady error:', e); }
     });
+    
     socket.on('startGame', (roomCode) => {
         try {
             const room = flip7Rooms[roomCode];
             if (room) { room.phase = 'GAME'; flip7Io.to(roomCode).emit('gameStarted', room); }
-        } catch(e) {}
+        } catch(e) { console.error('Flip7 startGame error:', e); }
     });
+    
     socket.on('sendGameStateSync', ({ roomCode, gameState }) => {
         try { socket.to(roomCode).emit('updateGameStateSync', gameState); } catch(e) {}
     });
+    
     socket.on('requestSyncFromOthers', (roomCode) => {
         try { socket.to(roomCode).emit('provideGameState'); } catch(e) {}
     });
+    
     socket.on('leaveRoom', (roomCode) => {
         try {
             const room = flip7Rooms[roomCode];
             if (!room) return;
 
             if (room.players.length > 0 && room.players[0].id === socket.id && room.players.some(p => p.isBot)) {
-                flip7Io.to(roomCode).emit('roomDestroyed', { message: '방장이 퇴장하여 방이 폭파되었습니다.' });
-                delete flip7Rooms[roomCode];
+                destroyRoom(flip7Rooms, flip7DisconnectTimers, roomCode, flip7Io, '방장이 퇴장하여 방이 폭파되었습니다.');
                 return;
             }
 
             room.players = room.players.filter(p => p.id !== socket.id);
             socket.leave(roomCode);
-            if (room.players.length === 0) delete flip7Rooms[roomCode];
+            if (room.players.length === 0) destroyRoom(flip7Rooms, flip7DisconnectTimers, roomCode, flip7Io);
             else flip7Io.to(roomCode).emit('roomUpdate', room);
-        } catch(e) {}
+        } catch(e) { console.error('Flip7 leaveRoom error:', e); }
     });
+    
     socket.on('disconnect', () => {
         try {
             for (let roomCode in flip7Rooms) {
@@ -403,19 +441,17 @@ flip7Io.on('connection', (socket) => {
                     const player = room.players[playerIndex];
 
                     if (playerIndex === 0 && room.players.some(p => p.isBot)) {
-                        flip7Io.to(roomCode).emit('roomDestroyed', { message: '방장의 연결이 끊겨 방이 폭파되었습니다.' });
-                        const disconnectKey = `${roomCode}_${player.userId}`;
-                        if (flip7DisconnectTimers[disconnectKey]) clearTimeout(flip7DisconnectTimers[disconnectKey]);
-                        delete flip7Rooms[roomCode];
+                        destroyRoom(flip7Rooms, flip7DisconnectTimers, roomCode, flip7Io, '방장의 연결이 끊겨 방이 폭파되었습니다.');
                         continue;
                     }
 
                     player.connected = false;
                     const disconnectKey = `${roomCode}_${player.userId}`;
                     if (flip7DisconnectTimers[disconnectKey]) clearTimeout(flip7DisconnectTimers[disconnectKey]);
+                    
                     if (room.phase === 'LOBBY') {
                         room.players.splice(playerIndex, 1);
-                        if (room.players.length === 0) delete flip7Rooms[roomCode];
+                        if (room.players.length === 0) destroyRoom(flip7Rooms, flip7DisconnectTimers, roomCode, flip7Io);
                         else flip7Io.to(roomCode).emit('roomUpdate', room);
                     } else {
                         flip7Io.to(roomCode).emit('playerDisconnected', { id: player.id, name: player.name });
@@ -424,8 +460,9 @@ flip7Io.on('connection', (socket) => {
                             const currentRoom = flip7Rooms[roomCode];
                             if (!currentRoom) return;
                             currentRoom.players = currentRoom.players.filter(p => p.userId !== player.userId);
-                            if (currentRoom.players.length === 0) delete flip7Rooms[roomCode];
-                            else {
+                            if (currentRoom.players.length === 0) {
+                                destroyRoom(flip7Rooms, flip7DisconnectTimers, roomCode, flip7Io);
+                            } else {
                                 flip7Io.to(roomCode).emit('playerKicked', { userId: player.userId, name: player.name });
                                 flip7Io.to(roomCode).emit('roomUpdate', currentRoom);
                             }
@@ -433,7 +470,7 @@ flip7Io.on('connection', (socket) => {
                     }
                 }
             }
-        } catch(e) {}
+        } catch(e) { console.error('Flip7 disconnect error:', e); }
     });
 });
 
@@ -452,7 +489,7 @@ function emitCoupUpdate(roomCode, room) {
     coupIo.to(roomCode).emit('roomUpdate', safeRoom);
 }
 
-function clearCoupTimer(room) {
+function clearCoupMainTimer(room) {
     if (room.timer && room.timer.timeoutId) {
         clearTimeout(room.timer.timeoutId);
         room.timer.timeoutId = null;
@@ -461,7 +498,7 @@ function clearCoupTimer(room) {
 }
 
 function startCoupTimer(room, roomCode, durationSec, callback) {
-    clearCoupTimer(room);
+    clearCoupMainTimer(room);
     const durationMs = durationSec * 1000;
     const endTime = Date.now() + durationMs;
     room.timer = {
@@ -488,7 +525,7 @@ const createCoupDeck = (playerCount) => {
 };
 
 function nextTurnCoup(room, roomCode) {
-    clearCoupTimer(room);
+    clearCoupMainTimer(room);
     room.actionState = null; 
     
     const activePlayers = room.players.filter(p => !p.isDead);
@@ -564,7 +601,7 @@ function setNextBlocker(room, roomCode) {
         });
         emitCoupUpdate(roomCode, room);
     } else {
-        clearCoupTimer(room);
+        clearCoupMainTimer(room);
         const actor = room.players.find(p => p.id === room.actionState.actorId);
         const target = room.players.find(p => p.id === room.actionState.targetId);
         if (actor) {
@@ -604,7 +641,7 @@ function setNextBlocker(room, roomCode) {
 }
 
 function processBlockResponse(room, roomCode, playerId, block, blockRole) {
-    clearCoupTimer(room);
+    clearCoupMainTimer(room);
     const actor = room.players.find(p => p.id === room.actionState.actorId);
 
     if (block) { 
@@ -643,7 +680,7 @@ function processBlockResponse(room, roomCode, playerId, block, blockRole) {
         coupIo.to(roomCode).emit('showOkEmote', playerId); 
 
         if (room.actionState.type === 'ASSASSIN' || room.actionState.type === 'CAPTAIN') {
-            clearCoupTimer(room);
+            clearCoupMainTimer(room);
             const target = room.players.find(p => p.id === room.actionState.targetId);
             if (room.actionState.type === 'ASSASSIN') {
                 coupIo.to(roomCode).emit('actionAnnounce', { actorName: actor ? actor.name : '', actionText: '처치에 성공했습니다.' });
@@ -682,7 +719,7 @@ function processBlockResponse(room, roomCode, playerId, block, blockRole) {
 }
 
 function processChallengeResponse(room, roomCode, playerId, challenge) {
-    clearCoupTimer(room);
+    clearCoupMainTimer(room);
     const actor = room.players.find(p => p.id === room.actionState.actorId);
     const actorName = actor ? actor.name : '';
 
@@ -748,15 +785,14 @@ function processChallengeResponse(room, roomCode, playerId, challenge) {
 }
 
 function processRevealCard(room, roomCode, revealerId, cardIndex) {
-    clearCoupTimer(room);
+    clearCoupMainTimer(room);
     const revealer = room.players.find(p => p.id === revealerId);
     if (!revealer) return;
     const card = revealer.influence[cardIndex];
     if (!card || !card.alive) return;
 
-    // 🚀 버그 핵심 수정구간: 더블클릭 중복 실행 방지
-    // REVEAL_CARD 상태일 때만 동작하도록 잠가버려서, 애니메이션 도중에 중복 클릭으로 인한 두 번 실행(턴 스킵, 두 카드 겹침)을 원천 차단합니다.
-    if (room.actionState && room.actionState.phase !== 'REVEAL_CARD') return;
+    // 👇 REVEAL_ANIMATING 상태도 통과할 수 있도록 예외 추가!
+    if (room.actionState && room.actionState.phase !== 'REVEAL_CARD' && room.actionState.phase !== 'REVEAL_ANIMATING') return;
     if (room.actionState) room.actionState.phase = 'REVEAL_ANIMATING';
 
     const actionType = room.actionState ? room.actionState.type : '';
@@ -776,7 +812,7 @@ function processRevealCard(room, roomCode, revealerId, cardIndex) {
         isFailPenaltyMatch = (card.role === '자객');
     }
 
-    if (actionType === 'ASSASSIN_BLOCK_CHALLENGE' && !isSuccess) {
+    if ((actionType === 'ASSASSIN_BLOCK_CHALLENGE' && !isSuccess) || (actionType === 'ASSASSIN_FAIL_PENALTY' && !isFailPenaltyMatch)) {
         card.alive = false;
         coupIo.to(roomCode).emit('blockRevealAnimation', {
             revealerId: revealer.id,
@@ -788,7 +824,8 @@ function processRevealCard(room, roomCode, revealerId, cardIndex) {
         coupIo.to(roomCode).emit('actionAnnounce', { actorName: revealer.name, actionText: '모두를 속였기에 모든패가 죽습니다.' });
         emitCoupUpdate(roomCode, room);
 
-        setTimeout(() => {
+        // 🚀 TimerHelper로 누수 방지 처리
+        TimerHelper.add(room, () => {
             const currentRoom = coupRooms[roomCode];
             if (!currentRoom) return;
             const currentRevealer = currentRoom.players.find(p => p.id === revealerId);
@@ -810,80 +847,7 @@ function processRevealCard(room, roomCode, revealerId, cardIndex) {
                 coupIo.to(roomCode).emit('actionAnnounce', { actorName: currentRevealer.name, actionText: '모두를 속였기에 모든패가 죽습니다.' });
                 emitCoupUpdate(roomCode, currentRoom);
 
-                setTimeout(() => {
-                    const finalRoom = coupRooms[roomCode];
-                    if (!finalRoom) return;
-
-                    const alivePlayers = finalRoom.players.filter(p => !p.isDead);
-                    if (alivePlayers.length <= 1) {
-                        finalRoom.phase = 'GAME_OVER';
-                        finalRoom.winner = alivePlayers[0]?.name || '생존자 없음';
-                        finalRoom.actionState = null;
-                        emitCoupUpdate(roomCode, finalRoom);
-                    } else {
-                        finalRoom.actionState = null;
-                        nextTurnCoup(finalRoom, roomCode);
-                        emitCoupUpdate(roomCode, finalRoom);
-                    }
-                }, 3000);
-            } else {
-                // 🚀 추가 버그 수정: 남은 카드가 1장인데 모두 죽어야 하는 상황에서 턴이 넘어가지 않던 버그 수정
-                currentRevealer.isDead = true;
-                setTimeout(() => {
-                    const finalRoom = coupRooms[roomCode];
-                    if (!finalRoom) return;
-                    const alivePlayers = finalRoom.players.filter(p => !p.isDead);
-                    if (alivePlayers.length <= 1) {
-                        finalRoom.phase = 'GAME_OVER';
-                        finalRoom.winner = alivePlayers[0]?.name || '생존자 없음';
-                        finalRoom.actionState = null;
-                        emitCoupUpdate(roomCode, finalRoom);
-                    } else {
-                        finalRoom.actionState = null;
-                        nextTurnCoup(finalRoom, roomCode);
-                        emitCoupUpdate(roomCode, finalRoom);
-                    }
-                }, 1500);
-            }
-        }, 1500);
-        return;
-    }
-
-    if (actionType === 'ASSASSIN_FAIL_PENALTY' && !isFailPenaltyMatch) {
-        card.alive = false;
-        coupIo.to(roomCode).emit('blockRevealAnimation', {
-            revealerId: revealer.id,
-            cardIndex: cardIndex,
-            revealedRole: card.role,
-            isSuccess: false
-        });
-
-        coupIo.to(roomCode).emit('actionAnnounce', { actorName: revealer.name, actionText: '모두를 속였기에 모든패가 죽습니다.' });
-        emitCoupUpdate(roomCode, room);
-
-        setTimeout(() => {
-            const currentRoom = coupRooms[roomCode];
-            if (!currentRoom) return;
-            const currentRevealer = currentRoom.players.find(p => p.id === revealerId);
-            if (!currentRevealer) return;
-
-            const secondCardIdx = currentRevealer.influence.findIndex(c => c.alive);
-            if (secondCardIdx !== -1) {
-                const secondCard = currentRevealer.influence[secondCardIdx];
-                secondCard.alive = false;
-                currentRevealer.isDead = true;
-
-                coupIo.to(roomCode).emit('blockRevealAnimation', {
-                    revealerId: currentRevealer.id,
-                    cardIndex: secondCardIdx,
-                    revealedRole: secondCard.role,
-                    isSuccess: false
-                });
-
-                coupIo.to(roomCode).emit('actionAnnounce', { actorName: currentRevealer.name, actionText: '모두를 속였기에 모든패가 죽습니다.' });
-                emitCoupUpdate(roomCode, currentRoom);
-
-                setTimeout(() => {
+                TimerHelper.add(currentRoom, () => {
                     const finalRoom = coupRooms[roomCode];
                     if (!finalRoom) return;
                     const alivePlayers = finalRoom.players.filter(p => !p.isDead);
@@ -900,7 +864,7 @@ function processRevealCard(room, roomCode, revealerId, cardIndex) {
                 }, 3000);
             } else {
                 currentRevealer.isDead = true;
-                setTimeout(() => {
+                TimerHelper.add(currentRoom, () => {
                     const finalRoom = coupRooms[roomCode];
                     if (!finalRoom) return;
                     const alivePlayers = finalRoom.players.filter(p => !p.isDead);
@@ -927,11 +891,13 @@ function processRevealCard(room, roomCode, revealerId, cardIndex) {
         isSuccess: actionType === 'ASSASSIN_FAIL_PENALTY' ? false : isSuccess 
     });
 
-    setTimeout(() => {
+    // 🚀 TimerHelper로 교체
+    TimerHelper.add(room, () => {
         const currentRoom = coupRooms[roomCode];
         if (!currentRoom) return;
         const currentRevealer = currentRoom.players.find(p => p.id === revealerId);
         if (!currentRevealer) return;
+        
         const curRevealerName = currentRevealer ? currentRevealer.name : '';
         const currentCard = currentRevealer.influence[cardIndex];
         const curActionType = currentRoom.actionState ? currentRoom.actionState.type : '';
@@ -947,9 +913,7 @@ function processRevealCard(room, roomCode, revealerId, cardIndex) {
                 
                 coupIo.to(roomCode).emit('actionAnnounce', { actorName: curActorName, actionText: '공작을 증명하여 징세(+3코인)를 획득하고, 방해자는 패널티를 받습니다!' });
                 
-                if (currentActor && !currentActor.isDead) {
-                    currentActor.coins += 3;
-                }
+                if (currentActor && !currentActor.isDead) currentActor.coins += 3;
                 
                 currentRoom.actionState = {
                     ...currentRoom.actionState,
@@ -992,13 +956,11 @@ function processRevealCard(room, roomCode, revealerId, cardIndex) {
             }
         }
 
-        if (curActionType === 'COUP' || curActionType === 'ASSASSIN_DEATH' || curActionType === 'ASSASSIN_ATTACKER_DEATH' || curActionType === 'CHALLENGER_PENALTY' || curActionType === 'ASSASSIN_FAIL_PENALTY') {
+        if (['COUP', 'ASSASSIN_DEATH', 'ASSASSIN_ATTACKER_DEATH', 'CHALLENGER_PENALTY', 'ASSASSIN_FAIL_PENALTY'].includes(curActionType)) {
             currentCard.alive = false;
             
             const hasAliveCards = currentRevealer.influence.some(c => c.alive);
-            if (!hasAliveCards) {
-                currentRevealer.isDead = true;
-            }
+            if (!hasAliveCards) currentRevealer.isDead = true;
 
             const alivePlayers = currentRoom.players.filter(p => !p.isDead);
             if (alivePlayers.length <= 1) {
@@ -1056,9 +1018,7 @@ function processRevealCard(room, roomCode, revealerId, cardIndex) {
                 if (!currentRevealer.influence.some(c => c.alive)) currentRevealer.isDead = true;
                 
                 coupIo.to(roomCode).emit('actionAnnounce', { actorName: curActorName, actionText: '도전에 성공하여 방해를 뚫고 해외 원조를 받습니다!' });
-                if (currentActor && !currentActor.isDead) {
-                    currentActor.coins += 2;
-                }
+                if (currentActor && !currentActor.isDead) currentActor.coins += 2;
             }
         } else if (curActionType === 'ASSASSIN_BLOCK_CHALLENGE' || curActionType === 'CAPTAIN_BLOCK_CHALLENGE' || curActionType === 'CAPTAIN') {
             if (isSuccess) {
@@ -1138,7 +1098,7 @@ coupIo.on('connection', (socket) => {
         try {
             socket.join(roomCode);
             if (!coupRooms[roomCode]) {
-                coupRooms[roomCode] = { roomCode, phase: 'LOBBY', players: [], spectators: [], turnIndex: 0, deck: [], actionState: null, timer: null };
+                coupRooms[roomCode] = { roomCode, phase: 'LOBBY', players: [], spectators: [], turnIndex: 0, deck: [], actionState: null, timer: null, timeouts: new Set() };
             }
             const room = coupRooms[roomCode];
 
@@ -1174,10 +1134,7 @@ coupIo.on('connection', (socket) => {
                 existingPlayer.connected = true;
                 existingPlayer.isReconnecting = false;
                 
-                if (room.spectators) {
-                    room.spectators = room.spectators.filter(s => s.userId !== userId);
-                }
-
+                if (room.spectators) room.spectators = room.spectators.filter(s => s.userId !== userId);
                 if (room.turnId === oldId) room.turnId = socket.id;
                 
                 if (room.actionState) {
@@ -1201,7 +1158,7 @@ coupIo.on('connection', (socket) => {
                 }
             }
             emitCoupUpdate(roomCode, room);
-        } catch(e) {}
+        } catch(e) { console.error('Coup joinRoom error:', e); }
     });
 
     socket.on('playerReady', ({ roomCode, ready }) => {
@@ -1211,7 +1168,7 @@ coupIo.on('connection', (socket) => {
                 const player = room.players.find(p => p.id === socket.id);
                 if (player) { player.ready = ready; emitCoupUpdate(roomCode, room); }
             }
-        } catch(e) {}
+        } catch(e) { console.error('Coup playerReady error:', e); }
     });
 
     socket.on('startGame', (roomCode) => {
@@ -1240,7 +1197,7 @@ coupIo.on('connection', (socket) => {
             
             coupIo.to(roomCode).emit('gameStarted', room);
             nextTurnCoup(room, roomCode);
-        } catch(e) {}
+        } catch(e) { console.error('Coup startGame error:', e); }
     });
 
     socket.on('sendPassEmote', ({ roomCode }) => {
@@ -1258,7 +1215,7 @@ coupIo.on('connection', (socket) => {
             if (!actor || socket.id !== room.turnId || actor.isDead || room.actionState) return;
             if (actor.coins >= 10 && action !== 'COUP') return;
 
-            clearCoupTimer(room);
+            clearCoupMainTimer(room);
 
             if (action === 'CAPTAIN' && target) {
                 room.actionState = { type: 'CAPTAIN', actorId: actor.id, targetId: target.id, askedList: [], phase: 'WAIT_BLOCK' };
@@ -1336,7 +1293,7 @@ coupIo.on('connection', (socket) => {
             } else {
                 nextTurnCoup(room, roomCode);
             }
-        } catch(e) {}
+        } catch(e) { console.error('Coup submitAction error:', e); }
     });
 
     socket.on('ambassadorChosen', ({ roomCode, keepIndices, returnIndices }) => {
@@ -1344,7 +1301,7 @@ coupIo.on('connection', (socket) => {
             const room = coupRooms[roomCode];
             if (!room || !room.actionState || room.actionState.phase !== 'WAIT_AMBASSADOR' || room.actionState.actorId !== socket.id) return;
             
-            clearCoupTimer(room);
+            clearCoupMainTimer(room);
             const player = room.players.find(p => p.id === socket.id);
             if (!player || !room.tempAmbassadorCards) return;
 
@@ -1368,7 +1325,7 @@ coupIo.on('connection', (socket) => {
             coupIo.to(roomCode).emit('actionAnnounce', { actorName: player.name, actionText: '카드를 교환하였습니다.' });
             nextTurnCoup(room, roomCode);
             emitCoupUpdate(roomCode, room);
-        } catch(e) {}
+        } catch(e) { console.error('Coup ambassadorChosen error:', e); }
     });
 
     socket.on('blockResponse', ({ roomCode, block, blockRole }) => {
@@ -1376,8 +1333,8 @@ coupIo.on('connection', (socket) => {
             const room = coupRooms[roomCode];
             if (!room || !room.actionState || room.actionState.phase !== 'WAIT_BLOCK' || room.actionState.currentPromptId !== socket.id) return;
             
-            if (room.actionState.type === 'ASSASSIN' || room.actionState.type === 'CAPTAIN' || room.actionState.type === 'FOREIGN_AID' || room.actionState.type === 'DUKE') {
-                clearCoupTimer(room);
+            if (['ASSASSIN', 'CAPTAIN', 'FOREIGN_AID', 'DUKE'].includes(room.actionState.type)) {
+                clearCoupMainTimer(room);
                 if (block) {
                     room.actionState.blockerId = socket.id;
                     room.actionState.blockRole = blockRole || (room.actionState.type === 'ASSASSIN' ? '귀부인' : (room.actionState.type === 'FOREIGN_AID' || room.actionState.type === 'DUKE' ? '공작' : '사령관'));
@@ -1420,7 +1377,7 @@ coupIo.on('connection', (socket) => {
             }
 
             processBlockResponse(room, roomCode, socket.id, block, blockRole);
-        } catch(e){}
+        } catch(e){ console.error('Coup blockResponse error:', e); }
     });
 
     socket.on('challengeResponse', ({ roomCode, challenge }) => {
@@ -1428,19 +1385,17 @@ coupIo.on('connection', (socket) => {
             const room = coupRooms[roomCode];
             if (!room || !room.actionState || room.actionState.phase !== 'WAIT_CHALLENGE' || room.actionState.actorId !== socket.id) return;
             processChallengeResponse(room, roomCode, socket.id, challenge);
-        } catch(e){}
+        } catch(e){ console.error('Coup challengeResponse error:', e); }
     });
 
     socket.on('revealCard', ({ roomCode, cardIndex }) => {
         try {
             const room = coupRooms[roomCode];
-            // 🚀 버그 핵심 수정구간: 중복 클릭 원천 차단
             if (!room || !room.actionState || room.actionState.phase !== 'REVEAL_CARD' || room.actionState.revealerId !== socket.id) return;
             
-            // 신호가 들어오자마자 상태를 ANIMATING으로 변경하여 중복 신호를 무시하게 만듦
             room.actionState.phase = 'REVEAL_ANIMATING';
             processRevealCard(room, roomCode, socket.id, cardIndex);
-        } catch(e){}
+        } catch(e){ console.error('Coup revealCard error:', e); }
     });
 
     socket.on('leaveRoom', (roomCode) => {
@@ -1449,22 +1404,20 @@ coupIo.on('connection', (socket) => {
             if (!room) return;
 
             if (room.players.length > 0 && room.players[0].id === socket.id && room.players.some(p => p.isBot)) {
-                coupIo.to(roomCode).emit('roomDestroyed', { message: '방장이 퇴장하여 방이 폭파되었습니다.' });
-                clearCoupTimer(room);
-                delete coupRooms[roomCode];
+                destroyRoom(coupRooms, coupDisconnectTimers, roomCode, coupIo, '방장이 퇴장하여 방이 폭파되었습니다.');
                 return;
             }
 
             room.players = room.players.filter(p => p.id !== socket.id);
             if (room.spectators) room.spectators = room.spectators.filter(s => s.id !== socket.id);
             socket.leave(roomCode);
+            
             if (room.players.length === 0) {
-                clearCoupTimer(room);
-                delete coupRooms[roomCode];
+                destroyRoom(coupRooms, coupDisconnectTimers, roomCode, coupIo);
             } else {
                 emitCoupUpdate(roomCode, room);
             }
-        } catch(e){}
+        } catch(e){ console.error('Coup leaveRoom error:', e); }
     });
 
     socket.on('disconnect', () => {
@@ -1472,20 +1425,14 @@ coupIo.on('connection', (socket) => {
             for (let roomCode in coupRooms) {
                 const room = coupRooms[roomCode];
                 
-                if (room.spectators) {
-                    room.spectators = room.spectators.filter(s => s.id !== socket.id);
-                }
+                if (room.spectators) room.spectators = room.spectators.filter(s => s.id !== socket.id);
 
                 const playerIndex = room.players.findIndex(p => p.id === socket.id);
                 if (playerIndex !== -1) {
                     const player = room.players[playerIndex];
 
                     if (playerIndex === 0 && room.players.some(p => p.isBot)) {
-                        coupIo.to(roomCode).emit('roomDestroyed', { message: '방장의 연결이 끊겨 방이 폭파되었습니다.' });
-                        const disconnectKey = `${roomCode}_${player.userId}`;
-                        if (coupDisconnectTimers[disconnectKey]) clearTimeout(coupDisconnectTimers[disconnectKey]);
-                        clearCoupTimer(room);
-                        delete coupRooms[roomCode];
+                        destroyRoom(coupRooms, coupDisconnectTimers, roomCode, coupIo, '방장의 연결이 끊겨 방이 폭파되었습니다.');
                         continue;
                     }
 
@@ -1497,8 +1444,7 @@ coupIo.on('connection', (socket) => {
                     if (room.phase === 'LOBBY') {
                         room.players = room.players.filter(p => p.id !== socket.id);
                         if (room.players.length === 0) {
-                            clearCoupTimer(room);
-                            delete coupRooms[roomCode];
+                            destroyRoom(coupRooms, coupDisconnectTimers, roomCode, coupIo);
                         } else {
                             emitCoupUpdate(roomCode, room);
                         }
@@ -1513,8 +1459,7 @@ coupIo.on('connection', (socket) => {
                             
                             currentRoom.players = currentRoom.players.filter(p => p.userId !== player.userId);
                             if (currentRoom.players.length === 0) {
-                                clearCoupTimer(currentRoom);
-                                delete coupRooms[roomCode];
+                                destroyRoom(coupRooms, coupDisconnectTimers, roomCode, coupIo);
                             } else {
                                 coupIo.to(roomCode).emit('actionAnnounce', { actorName: '시스템', actionText: `${player.name}님이 60초 경과로 강퇴되었습니다.` });
                                 
@@ -1529,7 +1474,7 @@ coupIo.on('connection', (socket) => {
                     }
                 }
             }
-        } catch(e) {}
+        } catch(e) { console.error('Coup disconnect error:', e); }
     });
 });
 
