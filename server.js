@@ -55,8 +55,37 @@ function appendJosa(word, josa) {
 // ==========================================
 const pokerIo = io.of('/poker');
 const pokerRooms = {};
+
+const POKER_ANIMALS = [
+    { id: 'spider', name: '거미', img: 'https://masi4882.dothome.co.kr/01.jpg?v=2026' },
+    { id: 'stinkbug', name: '노린재', img: 'https://masi4882.dothome.co.kr/11.jpg?v=2026' },
+    { id: 'toad', name: '두꺼비', img: 'https://masi4882.dothome.co.kr/21.jpg?v=2026' },
+    { id: 'cockroach', name: '바퀴벌레', img: 'https://masi4882.dothome.co.kr/31.jpg?v=2026' },
+    { id: 'scorpion', name: '전갈', img: 'https://masi4882.dothome.co.kr/41.jpg?v=2026' },
+    { id: 'bat', name: '박쥐', img: 'https://masi4882.dothome.co.kr/51.jpg?v=2026' },
+    { id: 'rat', name: '쥐', img: 'https://masi4882.dothome.co.kr/61.jpg?v=2026' },
+    { id: 'fly', name: '파리', img: 'https://masi4882.dothome.co.kr/71.jpg?v=2026' }
+];
+const POKER_EXT_ANIMALS = [ ...POKER_ANIMALS,
+    { id: 'mosquito', name: '모기', img: 'https://masi4882.dothome.co.kr/81.jpg?v=2026' },
+    { id: 'snake', name: '뱀', img: 'https://masi4882.dothome.co.kr/91.jpg?v=2026' }
+];
+
+function createPokerDeck(playerCount) {
+    const animals = playerCount >= 7 ? POKER_EXT_ANIMALS : POKER_ANIMALS;
+    let deck = [];
+    animals.forEach(a => {
+        for (let i = 0; i < 7; i++) {
+            deck.push({ id: `${a.id}_${i}`, animalId: a.id, animalName: a.name, name: a.name, img: a.img, isKing: false });
+        }
+        deck.push({ id: `${a.id}_king`, animalId: a.id, animalName: a.name, name: `왕 ${a.name}`, img: a.img, isKing: true });
+    });
+    return deck.sort(() => Math.random() - 0.5);
+}
+
 pokerIo.on('connection', (socket) => {
     socket.on('pingHeartbeat', () => { socket.emit('pongHeartbeat'); });
+    
     socket.on('joinRoom', ({ roomCode, userName, userId, isBot }) => {
         try {
             socket.join(roomCode);
@@ -65,19 +94,21 @@ pokerIo.on('connection', (socket) => {
             let existingPlayer = room.players.find(p => (userId && p.userId === userId) || (userName && p.name === userName));
             
             if (!existingPlayer) {
+                if (room.phase !== 'LOBBY') return; // 게임 진행중엔 신규참여 관전처리 해야하지만 편의상 생략
                 room.players.push({
                     id: socket.id, userId, name: userName, isBot,
-                    ready: room.players.length === 0, score: 0, hand: [], penalties: [], handCount: 0, connected: true
+                    ready: room.players.length === 0, score: 0, hand: [], penalties: [], handCount: 0, connected: true, isReconnecting: false
                 });
             } else {
                 existingPlayer.id = socket.id;
                 existingPlayer.connected = true;
+                existingPlayer.isReconnecting = false;
+                room.paused = room.players.some(p => !p.connected); // 모두 들어오면 일시정지 해제
             }
             pokerIo.to(roomCode).emit('roomUpdate', room);
         } catch(e) {}
     });
 
-    // 🚀 [버그 픽스] 누락되어 있던 준비완료 신호 처리 로직 추가
     socket.on('playerReady', ({ roomCode, ready }) => {
         try {
             const room = pokerRooms[roomCode];
@@ -91,7 +122,175 @@ pokerIo.on('connection', (socket) => {
         } catch(e) {}
     });
 
-    // 🚀 [버그 픽스] 방 나가기 및 연결 끊김 시 인원 정리 로직 추가 (봇 새로고침 시 필수)
+    // 🚀 복구된 게임 시작 로직
+    socket.on('startGame', (roomCode) => {
+        try {
+            const room = pokerRooms[roomCode];
+            if (!room || room.players.length < 1) return;
+
+            room.phase = 'GAME';
+            room.activeOffer = null;
+            room.revealData = null;
+            
+            const deck = createPokerDeck(room.players.length);
+            
+            // 카드 분배
+            let pIdx = 0;
+            while(deck.length > 0) {
+                room.players[pIdx].hand.push(deck.pop());
+                pIdx = (pIdx + 1) % room.players.length;
+            }
+            
+            room.players.forEach(p => {
+                p.handCount = p.hand.length;
+                p.penalties = [];
+                p.lastClaim = null;
+            });
+
+            // 랜덤 선 지정
+            room.turnId = room.players[Math.floor(Math.random() * room.players.length)].id;
+            
+            pokerIo.to(roomCode).emit('gameStarted', room);
+        } catch (e) {}
+    });
+
+    // 🚀 복구된 공격(카드 건네기) 로직
+    socket.on('submitOffer', ({ roomCode, targetId, card, claim }) => {
+        try {
+            const room = pokerRooms[roomCode];
+            if (!room) return;
+            
+            const player = room.players.find(p => p.id === socket.id);
+            if (!player || room.turnId !== socket.id) return;
+            
+            // 패에서 카드 제거
+            player.hand = player.hand.filter(c => c.id !== card.id);
+            player.handCount = player.hand.length;
+            player.lastClaim = claim;
+
+            room.activeOffer = {
+                attackerId: socket.id,
+                senderId: socket.id,
+                targetId: targetId,
+                receiverId: targetId,
+                card: card,
+                claim: claim,
+                seenIds: [socket.id]
+            };
+            room.phase = 'RESPONSE';
+            pokerIo.to(roomCode).emit('onOffer', room);
+        } catch (e) {}
+    });
+
+    // 🚀 복구된 넘기기 로직
+    socket.on('submitPass', ({ roomCode, nextTargetId, newClaim }) => {
+        try {
+            const room = pokerRooms[roomCode];
+            if (!room || !room.activeOffer) return;
+            
+            const player = room.players.find(p => p.id === socket.id);
+            if(player) player.lastClaim = newClaim;
+
+            room.activeOffer.seenIds.push(socket.id);
+            room.activeOffer.senderId = socket.id;
+            room.activeOffer.targetId = nextTargetId;
+            room.activeOffer.receiverId = nextTargetId;
+            room.activeOffer.claim = newClaim;
+            
+            pokerIo.to(roomCode).emit('onOffer', room);
+        } catch (e) {}
+    });
+
+    // 🚀 복구된 진실/거짓 판정 로직
+    socket.on('resolveResponse', ({ roomCode, guessIsTrue }) => {
+        try {
+            const room = pokerRooms[roomCode];
+            if (!room || !room.activeOffer || room.activeOffer.receiverId !== socket.id) return;
+            
+            const offer = room.activeOffer;
+            const card = offer.card;
+            const claim = offer.claim;
+            
+            let actualClaimCorrect = false;
+            if (claim === '왕카드') actualClaimCorrect = card.isKing;
+            else actualClaimCorrect = (card.animalName === claim);
+            
+            const guessCorrect = (guessIsTrue === actualClaimCorrect);
+            const lastSenderId = offer.seenIds[offer.seenIds.length - 1];
+            
+            // 맞추면 공격자가 패배, 틀리면 수비자가 패배
+            const winnerId = guessCorrect ? socket.id : lastSenderId;
+            const loserId = guessCorrect ? lastSenderId : socket.id;
+            
+            room.revealData = {
+                winnerId,
+                penaltyId: loserId,
+                guessCorrect,
+                actualCard: card,
+                claim
+            };
+
+            const winner = room.players.find(p => p.id === winnerId);
+            const loser = room.players.find(p => p.id === loserId);
+
+            // 👑 왕카드 더블 페널티 룰렛 로직
+            if (claim === '왕카드' && winner && winner.penalties && winner.penalties.length > 0) {
+                const extraIdx = Math.floor(Math.random() * winner.penalties.length);
+                const extraCard = winner.penalties.splice(extraIdx, 1)[0];
+                room.revealData.extraCard = extraCard;
+            }
+
+            room.phase = 'REVEAL';
+            pokerIo.to(roomCode).emit('revealStart', room);
+
+            // 5초 뒤 결과 확정 및 다음 턴 진행
+            setTimeout(() => {
+                const curRoom = pokerRooms[roomCode];
+                if (!curRoom || curRoom.phase !== 'REVEAL') return;
+                
+                const curLoser = curRoom.players.find(p => p.id === loserId);
+                if (curLoser) {
+                    curLoser.penalties.push(card);
+                    if (curRoom.revealData.extraCard) {
+                        curLoser.penalties.push(curRoom.revealData.extraCard);
+                    }
+                }
+
+                const penaltyLimit = curRoom.players.length >= 7 ? 3 : 4;
+                let isGameOver = false;
+                
+                if (curLoser) {
+                    const counts = {};
+                    curLoser.penalties.forEach(c => {
+                        const aId = c.animalId || c.id.split('_')[0];
+                        counts[aId] = (counts[aId] || 0) + 1;
+                        if (counts[aId] >= penaltyLimit) isGameOver = true;
+                    });
+                    if (curLoser.handCount === 0) isGameOver = true;
+                }
+
+                if (isGameOver) {
+                    curRoom.phase = 'GAME_OVER';
+                    curRoom.loserId = loserId;
+                    curRoom.activeOffer = null;
+                    pokerIo.to(roomCode).emit('roomUpdate', curRoom);
+                } else {
+                    curRoom.phase = 'GAME';
+                    curRoom.turnId = loserId; // 진 사람이 다음 선
+                    curRoom.activeOffer = null;
+                    pokerIo.to(roomCode).emit('roundResolved', curRoom);
+                }
+            }, 5000);
+        } catch (e) {}
+    });
+
+    socket.on('forceTurnSkip', ({ roomCode, targetId }) => {
+        // 프론트의 클라이언트 코드(handleTimeout)에서 자동으로 submitOffer/resolveResponse를 발생시키므로 
+        // 서버단에서는 상태 업데이트 통신만 열어둡니다.
+        const room = pokerRooms[roomCode];
+        if (room) pokerIo.to(roomCode).emit('roomUpdate', room);
+    });
+
     socket.on('leaveRoom', (roomCode) => {
         try {
             const room = pokerRooms[roomCode];
@@ -115,15 +314,15 @@ pokerIo.on('connection', (socket) => {
                         else pokerIo.to(roomCode).emit('roomUpdate', room);
                     } else {
                         room.players[playerIndex].connected = false;
+                        room.players[playerIndex].isReconnecting = true;
+                        room.paused = true; // 게임 중지
+                        room.lastDisconnectTime = Date.now();
                         pokerIo.to(roomCode).emit('roomUpdate', room);
                     }
                 }
             }
         } catch(e) {}
     });
-
-    // ⚠️ 참고: 만약 보내주신 파일 원본에서 'startGame' 등의 인게임 처리 로직이 생략(Truncated)된 채로 
-    // 질문에 올려주셨던 것이라면 해당 인게임 로직 코드들은 이 아래에 그대로 유지되어야 합니다.
 });
 
 // ==========================================
