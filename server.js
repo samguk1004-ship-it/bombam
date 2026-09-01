@@ -450,9 +450,6 @@ function setNextBlocker(room, roomCode) {
     emitCoupUpdate(roomCode, room);
 }
 
-// ----------------------------------------------------------------------
-// 전면 개편된 processBlockResponse (ReferenceError 버그 픽스)
-// ----------------------------------------------------------------------
 function processBlockResponse(room, roomCode, playerId, block, blockRole, blockType) {
     clearCoupMainTimer(room);
     const actor = room.players.find(p => p.id === room.actionState.actorId);
@@ -476,9 +473,10 @@ function processBlockResponse(room, roomCode, playerId, block, blockRole, blockT
                     }
                 });
             } else {
-                room.actionState.blockerId = playerId; // (버그 해결) socket 객체가 아닌 전달받은 playerId를 사용
+                room.actionState.blockerId = playerId;
                 room.actionState.phase = 'WAIT_CHALLENGE';
                 room.actionState.type = isSecondStrike ? 'ASSASSIN_SECOND_STRIKE_BLOCK_CHALLENGE' : 'ASSASSIN_BLOCK_CHALLENGE';
+                room.actionState.blockRole = '귀부인'; // 프론트 상태 동기화를 위해 역할 명시적 저장
                 emitCoupUpdate(roomCode, room);
                 startCoupTimer(room, roomCode, 30, () => {
                     const curRoom = coupRooms[roomCode];
@@ -508,8 +506,10 @@ function processBlockResponse(room, roomCode, playerId, block, blockRole, blockT
         return;
     }
 
+    // [FIX] 강탈 방해 시 사용하는 blockRole을 정상 저장하도록 수정
     if (block) { 
         room.actionState.blockerId = playerId;
+        // 강탈 시 유저가 선택한 방해 카드(사령관/외교관)를 blockRole에 저장
         room.actionState.blockRole = blockRole || (room.actionState.type === 'FOREIGN_AID' || room.actionState.type === 'DUKE' ? '공작' : (room.actionState.type === 'AMBASSADOR' ? '외교관' : '사령관'));
 
         room.actionState.phase = 'WAIT_CHALLENGE';
@@ -652,12 +652,13 @@ function processRevealCard(room, roomCode, revealerId, cardIndex) {
     
     let isSuccess = false;
 
+    // [FIX] 강탈 블락 성공 여부를 확인 시, 방해선언 역할(blockRole)과 동일한지 철저히 검증 (외교관 선언하고 사령관 내면 사망 처리)
     if (actionType === 'ASSASSIN_CHALLENGE_REVEAL') {
         isSuccess = (card.role === '자객');
     } else if (actionType === 'ASSASSIN_BLOCK_REVEAL' || actionType === 'ASSASSIN_SECOND_STRIKE_BLOCK_REVEAL') {
         isSuccess = (card.role === '귀부인');
     } else if (actionType === 'CAPTAIN_BLOCK_REVEAL') {
-        isSuccess = (card.role === '사령관' || card.role === '외교관');
+        isSuccess = (card.role === room.actionState.blockRole);
     } else if (actionType === 'CAPTAIN_CHALLENGE_REVEAL') {
         isSuccess = (card.role === '사령관');
     } else if (actionType === 'DUKE_REVEAL' || actionType === 'FOREIGN_AID' || actionType === 'FOREIGN_AID_BLOCK_CHALLENGE') {
@@ -1085,6 +1086,7 @@ coupIo.on('connection', (socket) => {
                         room.actionState.blockerId = socket.id;
                         room.actionState.phase = 'WAIT_CHALLENGE';
                         room.actionState.type = 'CAPTAIN_BLOCK';
+                        room.actionState.blockRole = blockRole; // [FIX] 프론트엔드로 방해 역할(사령관/외교관) 전송
                         emitCoupUpdate(roomCode, room);
                         startCoupTimer(room, roomCode, 30, () => {
                              const curRoom = coupRooms[roomCode];
