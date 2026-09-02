@@ -339,7 +339,7 @@ function nextTurnCoup(room, roomCode) {
         const actor = currentRoom.players.find(p => p.id === currentRoom.turnId);
         if (actor && !actor.isDead) {
             actor.coins += 1;
-            coupIo.to(roomCode).emit('actionAnnounce', { actorName: actor.name, actionText: '시간 초과로 소득(+1)을 획득했습니다.' });
+            coupIo.to(roomCode).emit('actionAnnounce', { actorName: actor.name, actionText: '시간 초과로 소득(+1)을 획득했습니다' });
         }
         const alive = currentRoom.players.filter(p => !p.isDead);
         if (alive.length <= 1) {
@@ -420,7 +420,7 @@ function setNextBlocker(room, roomCode) {
                 triggerAmbassadorDraw(room, roomCode, actor);
                 return; 
             } else if (room.actionState.type === 'ASSASSIN' || room.actionState.type === 'ASSASSIN_SECOND_STRIKE') {
-                coupIo.to(roomCode).emit('actionAnnounce', { actorName: actor.name, actionText: '처치에 성공했습니다.' });
+                coupIo.to(roomCode).emit('actionAnnounce', { actorName: actor.name, actionText: '처치에 성공했습니다' });
                 if (target && !target.isDead) {
                     room.actionState.phase = 'REVEAL_CARD';
                     room.actionState.revealerId = target.id;
@@ -441,7 +441,7 @@ function setNextBlocker(room, roomCode) {
                 const stealAmount = Math.min(2, target ? target.coins : 0);
                 if (target) target.coins -= stealAmount;
                 actor.coins += stealAmount;
-                coupIo.to(roomCode).emit('actionAnnounce', { actorName: '시스템', actionText: `${actor.name}${getJosa(actor.name, '이/가')} 강탈에 성공합니다. +${stealAmount}코인을 가져갑니다.` });
+                coupIo.to(roomCode).emit('actionAnnounce', { actorName: '시스템', actionText: `${actor.name}${getJosa(actor.name, '이/가')} 강탈에 성공합니다. +${stealAmount}코인을 가져갑니다` });
             }
         }
         room.actionState = null;
@@ -490,7 +490,7 @@ function processBlockResponse(room, roomCode, playerId, block, blockRole, blockT
             room.actionState.type = 'ASSASSIN_DEATH'; 
             room.actionState.revealerId = playerId;
             const targetName = room.players.find(p => p.id === playerId)?.name || '';
-            coupIo.to(roomCode).emit('actionAnnounce', { actorName: '시스템', actionText: `${targetName}${getJosa(targetName, '이/가')} 암살당했습니다.` });
+            coupIo.to(roomCode).emit('actionAnnounce', { actorName: '시스템', actionText: `${targetName}${getJosa(targetName, '이/가')} 암살당했습니다` });
             emitCoupUpdate(roomCode, room);
             startCoupTimer(room, roomCode, 30, () => {
                 const curRoom = coupRooms[roomCode];
@@ -549,7 +549,7 @@ function processChallengeResponse(room, roomCode, playerId, challenge) {
                 }
             });
         } else {
-            coupIo.to(roomCode).emit('actionAnnounce', { actorName: '시스템', actionText: '경호에 성공했습니다.' });
+            coupIo.to(roomCode).emit('actionAnnounce', { actorName: '시스템', actionText: '경호에 성공했습니다' });
             room.actionState = null;
             nextTurnCoup(room, roomCode);
             emitCoupUpdate(roomCode, room);
@@ -573,7 +573,7 @@ function processChallengeResponse(room, roomCode, playerId, challenge) {
                 }
             });
         } else { 
-            coupIo.to(roomCode).emit('actionAnnounce', { actorName: '시스템', actionText: `${actorName}${getJosa(actorName, '이/가')} 강탈을 방해받았습니다.` });
+            coupIo.to(roomCode).emit('actionAnnounce', { actorName: '시스템', actionText: `${actorName}${getJosa(actorName, '이/가')} 강탈을 방해받았습니다` });
             room.actionState = null;
             nextTurnCoup(room, roomCode);
             emitCoupUpdate(roomCode, room);
@@ -598,9 +598,9 @@ function processChallengeResponse(room, roomCode, playerId, challenge) {
             });
         } else { 
             if (room.actionState.type === 'DUKE') {
-                coupIo.to(roomCode).emit('actionAnnounce', { actorName: actorName, actionText: '징세를 포기하여 징세에 실패했습니다.' });
+                coupIo.to(roomCode).emit('actionAnnounce', { actorName: actorName, actionText: '징세를 포기하여 징세에 실패했습니다' });
             } else {
-                coupIo.to(roomCode).emit('actionAnnounce', { actorName: '시스템', actionText: `${actorName}${getJosa(actorName, '이/가')} 교환에 실패했습니다.` });
+                coupIo.to(roomCode).emit('actionAnnounce', { actorName: '시스템', actionText: `${actorName}${getJosa(actorName, '이/가')} 교환에 실패했습니다` });
             }
             room.actionState = null;
             nextTurnCoup(room, roomCode);
@@ -627,9 +627,9 @@ function processChallengeResponse(room, roomCode, playerId, challenge) {
         });
     } else {
         if (room.actionState.type === 'FOREIGN_AID') {
-            coupIo.to(roomCode).emit('actionAnnounce', { actorName: actorName, actionText: '공작의 방해로 해외 원조에 실패했습니다.' });
+            coupIo.to(roomCode).emit('actionAnnounce', { actorName: actorName, actionText: '공작의 방해로 해외 원조에 실패했습니다' });
         } else {
-            coupIo.to(roomCode).emit('actionAnnounce', { actorName: actorName, actionText: '행동에 실패하였습니다.' });
+            coupIo.to(roomCode).emit('actionAnnounce', { actorName: actorName, actionText: '행동에 실패하였습니다' });
         }
         room.actionState = null;
         nextTurnCoup(room, roomCode);
@@ -670,13 +670,13 @@ function processRevealCard(room, roomCode, revealerId, cardIndex) {
     coupIo.to(roomCode).emit('blockRevealAnimation', { revealerId: revealer.id, cardIndex: cardIndex, revealedRole: card.role, isSuccess: isSuccess });
 
     if (actionType === 'ASSASSIN_CHALLENGE_REVEAL' && !isSuccess) {
-        coupIo.to(roomCode).emit('actionAnnounce', { actorName: '시스템', actionText: `${revealer.name}님이 자객 증명에 실패하여 카드를 잃고 사망합니다.` });
+        coupIo.to(roomCode).emit('actionAnnounce', { actorName: '시스템', actionText: `${revealer.name}님이 자객 증명에 실패하여 카드를 잃고 사망합니다` });
     } else if ((actionType === 'ASSASSIN_BLOCK_REVEAL' || actionType === 'ASSASSIN_SECOND_STRIKE_BLOCK_REVEAL') && !isSuccess) {
-        coupIo.to(roomCode).emit('actionAnnounce', { actorName: '시스템', actionText: '귀부인이 아니므로 카드를 잃고, 암살도 적용되어 사망합니다.' });
+        coupIo.to(roomCode).emit('actionAnnounce', { actorName: '시스템', actionText: '귀부인이 아니므로 카드를 잃고, 암살도 적용되어 사망합니다' });
     } else if (actionType === 'CAPTAIN_BLOCK_REVEAL' && !isSuccess) {
-        coupIo.to(roomCode).emit('actionAnnounce', { actorName: revealer.name, actionText: '방해에 실패하여 카드를 잃고 강탈이 적용됩니다.' });
+        coupIo.to(roomCode).emit('actionAnnounce', { actorName: revealer.name, actionText: '방해에 실패하여 카드를 잃고 강탈이 적용됩니다' });
     } else if (actionType === 'CAPTAIN_CHALLENGE_REVEAL' && !isSuccess) {
-        coupIo.to(roomCode).emit('actionAnnounce', { actorName: revealer.name, actionText: '사령관이 아니므로 카드를 잃고 강탈에 실패했습니다.' });
+        coupIo.to(roomCode).emit('actionAnnounce', { actorName: revealer.name, actionText: '사령관이 아니므로 카드를 잃고 강탈에 실패했습니다' });
     }
 
     TimerHelper.add(room, () => {
@@ -763,7 +763,7 @@ function processRevealCard(room, roomCode, revealerId, cardIndex) {
                 return;
             }
             else if (curActionType === 'FOREIGN_AID_BLOCK_CHALLENGE') {
-                coupIo.to(roomCode).emit('actionAnnounce', { actorName: curActorName, actionText: '도전에 실패하여 원조를 받지 못하고 패널티를 받습니다.' });
+                coupIo.to(roomCode).emit('actionAnnounce', { actorName: curActorName, actionText: '도전에 실패하여 원조를 받지 못하고 패널티를 받습니다' });
                 currentRoom.actionState = { ...currentRoom.actionState, phase: 'REVEAL_CARD', type: 'CHALLENGER_PENALTY', revealerId: currentRoom.actionState.actorId };
                 emitCoupUpdate(roomCode, currentRoom);
                 startRevealTimer(currentRoom.actionState.revealerId);
@@ -785,19 +785,19 @@ function processRevealCard(room, roomCode, revealerId, cardIndex) {
         if (!hasAliveCards) currentRevealer.isDead = true;
 
         if (curActionType === 'CHALLENGER_PENALTY') {
-            coupIo.to(roomCode).emit('actionAnnounce', { actorName: curActorName, actionText: '도전/의심 실패로 카드를 잃었습니다.' });
+            coupIo.to(roomCode).emit('actionAnnounce', { actorName: curActorName, actionText: '도전/의심 실패로 카드를 잃었습니다' });
         } else if (curActionType === 'ASSASSIN_CHALLENGE_FAIL_PENALTY') {
-            coupIo.to(roomCode).emit('actionAnnounce', { actorName: '시스템', actionText: '의심 실패로 카드를 잃습니다.' });
+            coupIo.to(roomCode).emit('actionAnnounce', { actorName: '시스템', actionText: '의심 실패로 카드를 잃습니다' });
         } else if (curActionType === 'ASSASSIN_BLOCK_FAIL_PENALTY') {
-            coupIo.to(roomCode).emit('actionAnnounce', { actorName: '시스템', actionText: '대상이 귀부인을 증명하여 카드를 잃습니다.' });
+            coupIo.to(roomCode).emit('actionAnnounce', { actorName: '시스템', actionText: '대상이 귀부인을 증명하여 카드를 잃습니다' });
         } else if (curActionType === 'CAPTAIN_BLOCK_PENALTY') {
-            coupIo.to(roomCode).emit('actionAnnounce', { actorName: curActorName, actionText: '강탈을 저지당하여 카드를 잃습니다.' });
+            coupIo.to(roomCode).emit('actionAnnounce', { actorName: curActorName, actionText: '강탈을 저지당하여 카드를 잃습니다' });
         } else if (curActionType === 'CAPTAIN_CHALLENGE_PENALTY') {
-            coupIo.to(roomCode).emit('actionAnnounce', { actorName: curRevealerName, actionText: '의심 실패로 카드를 잃습니다.' });
+            coupIo.to(roomCode).emit('actionAnnounce', { actorName: curRevealerName, actionText: '의심 실패로 카드를 잃습니다' });
         } else if (curActionType === 'DUKE_REVEAL' && !isSuccess) {
-            coupIo.to(roomCode).emit('actionAnnounce', { actorName: curActorName, actionText: '공작이 아니므로 카드를 잃고 징세에 실패했습니다.' });
+            coupIo.to(roomCode).emit('actionAnnounce', { actorName: curActorName, actionText: '공작이 아니므로 카드를 잃고 징세에 실패했습니다' });
         } else if (curActionType === 'AMBASSADOR_REVEAL' && !isSuccess) {
-            coupIo.to(roomCode).emit('actionAnnounce', { actorName: curActorName, actionText: '외교관이 아니므로 카드를 잃고 교환에 실패했습니다.' });
+            coupIo.to(roomCode).emit('actionAnnounce', { actorName: curActorName, actionText: '외교관이 아니므로 카드를 잃고 교환에 실패했습니다' });
         } else if (curActionType === 'FOREIGN_AID_BLOCK_CHALLENGE' && !isSuccess) {
             coupIo.to(roomCode).emit('actionAnnounce', { actorName: curActorName, actionText: '도전에 성공하여 방해를 뚫고 해외 원조를 받습니다!' });
             if (currentActor && !currentActor.isDead) currentActor.coins += 2;
@@ -805,7 +805,7 @@ function processRevealCard(room, roomCode, revealerId, cardIndex) {
             const stealAmount = Math.min(2, currentTarget ? currentTarget.coins : 0);
             if (currentTarget) currentTarget.coins -= stealAmount;
             if (currentActor) currentActor.coins += stealAmount;
-            coupIo.to(roomCode).emit('actionAnnounce', { actorName: '시스템', actionText: `${curActorName}${getJosa(curActorName, '이/가')} 강탈(+${stealAmount}코인)에 성공했습니다.` });
+            coupIo.to(roomCode).emit('actionAnnounce', { actorName: '시스템', actionText: `${curActorName}${getJosa(curActorName, '이/가')} 강탈(+${stealAmount}코인)에 성공했습니다` });
         }
 
         const alivePlayers = currentRoom.players.filter(p => !p.isDead);
@@ -905,7 +905,7 @@ coupIo.on('connection', (socket) => {
                 }
                 
                 if(room.phase === 'GAME' && !existingPlayer.isDead) {
-                    coupIo.to(roomCode).emit('actionAnnounce', { actorName: '시스템', actionText: `${existingPlayer.name}님이 재접속했습니다.` });
+                    coupIo.to(roomCode).emit('actionAnnounce', { actorName: '시스템', actionText: `${existingPlayer.name}님이 재접속했습니다` });
                 }
             }
             emitCoupUpdate(roomCode, room);
@@ -970,7 +970,7 @@ coupIo.on('connection', (socket) => {
 
             if (action === 'CAPTAIN' && target) {
                 room.actionState = { type: 'CAPTAIN', actorId: actor.id, targetId: target.id, askedList: [], phase: 'WAIT_BLOCK' };
-                coupIo.to(roomCode).emit('actionAnnounce', { actorName: actor.name, actionText: '강탈을 시도합니다.' });
+                coupIo.to(roomCode).emit('actionAnnounce', { actorName: actor.name, actionText: '강탈을 시도합니다' });
                 setNextBlocker(room, roomCode);
                 emitCoupUpdate(roomCode, room);
                 return;
@@ -978,7 +978,7 @@ coupIo.on('connection', (socket) => {
 
             if (action === 'INCOME') {
                 actor.coins += 1;
-                coupIo.to(roomCode).emit('actionAnnounce', { actorName: actor.name, actionText: '소득으로 +1코인을 획득했습니다.' });
+                coupIo.to(roomCode).emit('actionAnnounce', { actorName: actor.name, actionText: '소득으로 +1코인을 획득합니다' });
                 nextTurnCoup(room, roomCode);
                 emitCoupUpdate(roomCode, room);
                 return;
@@ -992,19 +992,19 @@ coupIo.on('connection', (socket) => {
                 return;
             } else if (action === 'AMBASSADOR') {
                 room.actionState = { type: 'AMBASSADOR', actorId: actor.id, askedList: [], phase: 'WAIT_BLOCK' };
-                coupIo.to(roomCode).emit('actionAnnounce', { actorName: actor.name, actionText: '카드를 교환합니다.' });
+                coupIo.to(roomCode).emit('actionAnnounce', { actorName: actor.name, actionText: '카드를 교환합니다' });
                 setNextBlocker(room, roomCode);
                 return;
             } else if (action === 'ASSASSIN' && target) {
                 actor.coins -= 3;
                 room.actionState = { type: 'ASSASSIN', actorId: actor.id, targetId: target.id, askedList: [], phase: 'WAIT_BLOCK' };
-                coupIo.to(roomCode).emit('actionAnnounce', { actorName: '시스템', actionText: `${actor.name}${getJosa(actor.name, '이/가')} ${target.name}${getJosa(target.name, '을/를')} 암살시도합니다.` });
+                coupIo.to(roomCode).emit('actionAnnounce', { actorName: '시스템', actionText: `${actor.name}${getJosa(actor.name, '이/가')} ${target.name}${getJosa(target.name, '을/를')} 암살시도합니다` });
                 setNextBlocker(room, roomCode);
                 return;
             } else if (action === 'COUP' && target) {
                 actor.coins -= 7;
                 room.actionState = { type: 'COUP', actorId: actor.id, revealerId: target.id, phase: 'REVEAL_CARD' };
-                coupIo.to(roomCode).emit('actionAnnounce', { actorName: actor.name, actionText: `${target.name}에게 쿠를 사용했습니다.` });
+                coupIo.to(roomCode).emit('actionAnnounce', { actorName: actor.name, actionText: `${target.name}에게 쿠를 사용했습니다` });
                 emitCoupUpdate(roomCode, room);
                 startCoupTimer(room, roomCode, 30, () => {
                     const currentRoom = coupRooms[roomCode];
@@ -1057,7 +1057,7 @@ coupIo.on('connection', (socket) => {
             room.tempAmbassadorCards = null;
             room.actionState = null;
 
-            coupIo.to(roomCode).emit('actionAnnounce', { actorName: player.name, actionText: '카드를 교환하였습니다.' });
+            coupIo.to(roomCode).emit('actionAnnounce', { actorName: player.name, actionText: '카드를 교환하였습니다' });
             nextTurnCoup(room, roomCode);
             emitCoupUpdate(roomCode, room);
         } catch(e) { console.error('Coup ambassadorChosen error:', e); }
