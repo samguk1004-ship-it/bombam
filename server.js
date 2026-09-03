@@ -130,13 +130,11 @@ pokerIo.on('connection', (socket) => {
             
             if (!existingPlayer) {
                 if (room.phase !== 'LOBBY') {
-                    // 🎮 게임 진행 중 새로운 접속 -> 관전자로 참여
                     room.players.push({ 
                         id: socket.id, userId, name: userName, isBot, 
                         isSpectator: true, connected: true 
                     });
                 } else {
-                    // 🎮 로비 상태 -> 일반 플레이어로 참여
                     room.players.push({ 
                         id: socket.id, userId, name: userName, isBot, 
                         ready: room.players.length === 0, score: 0, hand: [], penalties: [], handCount: 0, 
@@ -144,13 +142,11 @@ pokerIo.on('connection', (socket) => {
                     });
                 }
             } else {
-                // 🔌 기존 플레이어 재접속 (튕겼을 때 이어서 하기)
                 const oldId = existingPlayer.id;
                 existingPlayer.id = socket.id; 
                 existingPlayer.connected = true; 
                 existingPlayer.isReconnecting = false;
                 
-                // 소켓 ID가 변경되었으므로 게임 턴/타겟 ID들을 최신화
                 if (room.turnId === oldId) room.turnId = socket.id;
                 if (room.activeOffer) {
                     if (room.activeOffer.attackerId === oldId) room.activeOffer.attackerId = socket.id;
@@ -166,7 +162,6 @@ pokerIo.on('connection', (socket) => {
                     if (room.revealData.penaltyId === oldId) room.revealData.penaltyId = socket.id;
                 }
                 
-                // 관전자를 제외하고 플레이어 중 끊긴 사람이 아직 있는지 확인하여 게임 일시정지 해제 판단
                 room.paused = room.players.some(p => !p.connected && !p.isSpectator);
             }
             pokerIo.to(roomCode).emit('roomUpdate', room);
@@ -178,7 +173,6 @@ pokerIo.on('connection', (socket) => {
     socket.on('startGame', (roomCode) => {
         try {
             const room = pokerRooms[roomCode]; if (!room) return;
-            // 관전자를 제외한 실제 플레이어 인원 추출
             const activePlayers = room.players.filter(p => !p.isSpectator);
             if (activePlayers.length < 1) return;
             
@@ -228,7 +222,6 @@ pokerIo.on('connection', (socket) => {
                 const curLoser = curRoom.players.find(p => p.id === loserId);
                 if (curLoser) { curLoser.penalties.push(card); if (curRoom.revealData.extraCard) { curLoser.penalties.push(curRoom.revealData.extraCard); } }
                 
-                // 관전자 제외 인원수로 패배 조건 산출
                 const activePlayers = curRoom.players.filter(p => !p.isSpectator);
                 const penaltyLimit = activePlayers.length >= 7 ? 3 : 4; 
                 let isGameOver = false;
@@ -253,7 +246,6 @@ pokerIo.on('connection', (socket) => {
             
             const player = room.players[playerIndex];
             
-            // 방장(관전자가 아닌 일반유저) 퇴장 시 방 폭파
             if (playerIndex === 0 && room.players.some(p => p.isBot) && !player.isSpectator) { 
                 destroyRoom(pokerRooms, null, roomCode, pokerIo, '방장이 퇴장하여 방이 폭파되었습니다.'); 
                 return; 
@@ -279,13 +271,11 @@ pokerIo.on('connection', (socket) => {
                         continue; 
                     }
                     
-                    // 로비 상태이거나, 혹은 관전자라면 리스트에서 그냥 뺌
                     if (room.phase === 'LOBBY' || player.isSpectator) {
                         room.players.splice(playerIndex, 1);
                         if (room.players.length === 0) destroyRoom(pokerRooms, null, roomCode, pokerIo); 
                         else pokerIo.to(roomCode).emit('roomUpdate', room);
                     } else {
-                        // 게임 진행 중인 실제 플레이어가 튕긴 경우 -> 일시정지(Reconnecting) 활성화
                         player.connected = false; 
                         player.isReconnecting = true;
                         room.paused = true; 
@@ -1161,7 +1151,7 @@ coupIo.on('connection', (socket) => {
                         room.actionState.blockerId = socket.id;
                         room.actionState.phase = 'WAIT_CHALLENGE';
                         room.actionState.type = 'CAPTAIN_BLOCK';
-                        room.actionState.blockRole = blockRole; // [FIX] 프론트엔드로 방해 역할(사령관/외교관) 전송
+                        room.actionState.blockRole = blockRole; 
                         emitCoupUpdate(roomCode, room);
                         startCoupTimer(room, roomCode, 30, () => {
                              const curRoom = coupRooms[roomCode];
