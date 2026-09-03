@@ -111,11 +111,9 @@ function createPokerDeck(playerCount) {
     const animals = playerCount >= 7 ? POKER_EXT_ANIMALS : POKER_ANIMALS;
     let deck = [];
     animals.forEach(a => {
-        // 일반 카드 생성 (기존 img 사용)
         for (let i = 0; i < 7; i++) {
             deck.push({ id: `${a.id}_${i}`, animalId: a.id, animalName: a.name, name: a.name, img: a.img, isKing: false });
         }
-        // 왕카드 생성 (00, 10, 20... 방식으로 동적 생성)
         deck.push({ id: `${a.id}_king`, animalId: a.id, animalName: a.name, name: `왕 ${a.name}`, img: `https://masi4882.dothome.co.kr/${a.prefix}0.jpg?v=2026`, isKing: true });
     });
     return deck.sort(() => Math.random() - 0.5);
@@ -129,12 +127,47 @@ pokerIo.on('connection', (socket) => {
             if (!pokerRooms[roomCode]) pokerRooms[roomCode] = { roomCode, phase: 'LOBBY', players: [], spectators: [], timeouts: new Set(), paused: false };
             const room = pokerRooms[roomCode];
             let existingPlayer = room.players.find(p => (userId && p.userId === userId) || (userName && p.name === userName));
+            
             if (!existingPlayer) {
-                if (room.phase !== 'LOBBY') return;
-                room.players.push({ id: socket.id, userId, name: userName, isBot, ready: room.players.length === 0, score: 0, hand: [], penalties: [], handCount: 0, connected: true, isReconnecting: false });
+                if (room.phase !== 'LOBBY') {
+                    // 🎮 게임 진행 중 새로운 접속 -> 관전자로 참여
+                    room.players.push({ 
+                        id: socket.id, userId, name: userName, isBot, 
+                        isSpectator: true, connected: true 
+                    });
+                } else {
+                    // 🎮 로비 상태 -> 일반 플레이어로 참여
+                    room.players.push({ 
+                        id: socket.id, userId, name: userName, isBot, 
+                        ready: room.players.length === 0, score: 0, hand: [], penalties: [], handCount: 0, 
+                        connected: true, isReconnecting: false, isSpectator: false 
+                    });
+                }
             } else {
-                existingPlayer.id = socket.id; existingPlayer.connected = true; existingPlayer.isReconnecting = false;
-                room.paused = room.players.some(p => !p.connected);
+                // 🔌 기존 플레이어 재접속 (튕겼을 때 이어서 하기)
+                const oldId = existingPlayer.id;
+                existingPlayer.id = socket.id; 
+                existingPlayer.connected = true; 
+                existingPlayer.isReconnecting = false;
+                
+                // 소켓 ID가 변경되었으므로 게임 턴/타겟 ID들을 최신화
+                if (room.turnId === oldId) room.turnId = socket.id;
+                if (room.activeOffer) {
+                    if (room.activeOffer.attackerId === oldId) room.activeOffer.attackerId = socket.id;
+                    if (room.activeOffer.senderId === oldId) room.activeOffer.senderId = socket.id;
+                    if (room.activeOffer.targetId === oldId) room.activeOffer.targetId = socket.id;
+                    if (room.activeOffer.receiverId === oldId) room.activeOffer.receiverId = socket.id;
+                    if (room.activeOffer.seenIds) {
+                        room.activeOffer.seenIds = room.activeOffer.seenIds.map(id => id === oldId ? socket.id : id);
+                    }
+                }
+                if (room.revealData) {
+                    if (room.revealData.winnerId === oldId) room.revealData.winnerId = socket.id;
+                    if (room.revealData.penaltyId === oldId) room.revealData.penaltyId = socket.id;
+                }
+                
+                // 관전자를 제외하고 플레이어 중 끊긴 사람이 아직 있는지 확인하여 게임 일시정지 해제 판단
+                room.paused = room.players.some(p => !p.connected && !p.isSpectator);
             }
             pokerIo.to(roomCode).emit('roomUpdate', room);
         } catch(e) {}
@@ -144,12 +177,20 @@ pokerIo.on('connection', (socket) => {
     });
     socket.on('startGame', (roomCode) => {
         try {
-            const room = pokerRooms[roomCode]; if (!room || room.players.length < 1) return;
+            const room = pokerRooms[roomCode]; if (!room) return;
+            // 관전자를 제외한 실제 플레이어 인원 추출
+            const activePlayers = room.players.filter(p => !p.isSpectator);
+            if (activePlayers.length < 1) return;
+            
             room.phase = 'GAME'; room.activeOffer = null; room.revealData = null;
-            const deck = createPokerDeck(room.players.length);
-            let pIdx = 0; while(deck.length > 0) { room.players[pIdx].hand.push(deck.pop()); pIdx = (pIdx + 1) % room.players.length; }
-            room.players.forEach(p => { p.handCount = p.hand.length; p.penalties = []; p.lastClaim = null; });
-            room.turnId = room.players[Math.floor(Math.random() * room.players.length)].id;
+            const deck = createPokerDeck(activePlayers.length);
+            let pIdx = 0; 
+            while(deck.length > 0) { 
+                activePlayers[pIdx].hand.push(deck.pop()); 
+                pIdx = (pIdx + 1) % activePlayers.length; 
+            }
+            activePlayers.forEach(p => { p.handCount = p.hand.length; p.penalties = []; p.lastClaim = null; });
+            room.turnId = activePlayers[Math.floor(Math.random() * activePlayers.length)].id;
             pokerIo.to(roomCode).emit('gameStarted', room);
         } catch (e) {}
     });
@@ -186,7 +227,12 @@ pokerIo.on('connection', (socket) => {
                 const curRoom = pokerRooms[roomCode]; if (!curRoom || curRoom.phase !== 'REVEAL') return;
                 const curLoser = curRoom.players.find(p => p.id === loserId);
                 if (curLoser) { curLoser.penalties.push(card); if (curRoom.revealData.extraCard) { curLoser.penalties.push(curRoom.revealData.extraCard); } }
-                const penaltyLimit = curRoom.players.length >= 7 ? 3 : 4; let isGameOver = false;
+                
+                // 관전자 제외 인원수로 패배 조건 산출
+                const activePlayers = curRoom.players.filter(p => !p.isSpectator);
+                const penaltyLimit = activePlayers.length >= 7 ? 3 : 4; 
+                let isGameOver = false;
+                
                 if (curLoser) {
                     const counts = {};
                     curLoser.penalties.forEach(c => { const aId = c.animalId || c.id.split('_')[0]; counts[aId] = (counts[aId] || 0) + 1; if (counts[aId] >= penaltyLimit) isGameOver = true; });
@@ -198,26 +244,52 @@ pokerIo.on('connection', (socket) => {
         } catch (e) {}
     });
     socket.on('forceTurnSkip', ({ roomCode }) => { const room = pokerRooms[roomCode]; if (room) pokerIo.to(roomCode).emit('roomUpdate', room); });
+    
     socket.on('leaveRoom', (roomCode) => {
         try {
             const room = pokerRooms[roomCode]; if (!room) return;
-            if (room.players.length > 0 && room.players[0].id === socket.id && room.players.some(p => p.isBot)) { destroyRoom(pokerRooms, null, roomCode, pokerIo, '방장이 퇴장하여 방이 폭파되었습니다.'); return; }
-            room.players = room.players.filter(p => p.id !== socket.id); socket.leave(roomCode);
-            if (room.players.length === 0) destroyRoom(pokerRooms, null, roomCode, pokerIo); else pokerIo.to(roomCode).emit('roomUpdate', room);
+            const playerIndex = room.players.findIndex(p => p.id === socket.id);
+            if (playerIndex === -1) return;
+            
+            const player = room.players[playerIndex];
+            
+            // 방장(관전자가 아닌 일반유저) 퇴장 시 방 폭파
+            if (playerIndex === 0 && room.players.some(p => p.isBot) && !player.isSpectator) { 
+                destroyRoom(pokerRooms, null, roomCode, pokerIo, '방장이 퇴장하여 방이 폭파되었습니다.'); 
+                return; 
+            }
+            
+            room.players.splice(playerIndex, 1);
+            socket.leave(roomCode);
+            
+            if (room.players.length === 0) destroyRoom(pokerRooms, null, roomCode, pokerIo); 
+            else pokerIo.to(roomCode).emit('roomUpdate', room);
         } catch(e) {}
     });
+    
     socket.on('disconnect', () => {
         try {
             for (let roomCode in pokerRooms) {
-                const room = pokerRooms[roomCode]; const playerIndex = room.players.findIndex(p => p.id === socket.id);
+                const room = pokerRooms[roomCode]; 
+                const playerIndex = room.players.findIndex(p => p.id === socket.id);
                 if (playerIndex !== -1) {
-                    if (playerIndex === 0 && room.players.some(p => p.isBot)) { destroyRoom(pokerRooms, null, roomCode, pokerIo, '방장의 연결이 끊겨 방이 폭파되었습니다.'); continue; }
-                    if (room.phase === 'LOBBY') {
+                    const player = room.players[playerIndex];
+                    if (playerIndex === 0 && room.players.some(p => p.isBot) && !player.isSpectator) { 
+                        destroyRoom(pokerRooms, null, roomCode, pokerIo, '방장의 연결이 끊겨 방이 폭파되었습니다.'); 
+                        continue; 
+                    }
+                    
+                    // 로비 상태이거나, 혹은 관전자라면 리스트에서 그냥 뺌
+                    if (room.phase === 'LOBBY' || player.isSpectator) {
                         room.players.splice(playerIndex, 1);
-                        if (room.players.length === 0) destroyRoom(pokerRooms, null, roomCode, pokerIo); else pokerIo.to(roomCode).emit('roomUpdate', room);
+                        if (room.players.length === 0) destroyRoom(pokerRooms, null, roomCode, pokerIo); 
+                        else pokerIo.to(roomCode).emit('roomUpdate', room);
                     } else {
-                        room.players[playerIndex].connected = false; room.players[playerIndex].isReconnecting = true;
-                        room.paused = true; room.lastDisconnectTime = Date.now();
+                        // 게임 진행 중인 실제 플레이어가 튕긴 경우 -> 일시정지(Reconnecting) 활성화
+                        player.connected = false; 
+                        player.isReconnecting = true;
+                        room.paused = true; 
+                        room.lastDisconnectTime = Date.now();
                         pokerIo.to(roomCode).emit('roomUpdate', room);
                     }
                 }
@@ -482,7 +554,7 @@ function processBlockResponse(room, roomCode, playerId, block, blockRole, blockT
                 room.actionState.blockerId = playerId;
                 room.actionState.phase = 'WAIT_CHALLENGE';
                 room.actionState.type = isSecondStrike ? 'ASSASSIN_SECOND_STRIKE_BLOCK_CHALLENGE' : 'ASSASSIN_BLOCK_CHALLENGE';
-                room.actionState.blockRole = '귀부인'; // 프론트 상태 동기화를 위해 역할 명시적 저장
+                room.actionState.blockRole = '귀부인'; 
                 emitCoupUpdate(roomCode, room);
                 startCoupTimer(room, roomCode, 30, () => {
                     const curRoom = coupRooms[roomCode];
@@ -512,10 +584,8 @@ function processBlockResponse(room, roomCode, playerId, block, blockRole, blockT
         return;
     }
 
-    // [FIX] 강탈 방해 시 사용하는 blockRole을 정상 저장하도록 수정
     if (block) { 
         room.actionState.blockerId = playerId;
-        // 강탈 시 유저가 선택한 방해 카드(사령관/외교관)를 blockRole에 저장
         room.actionState.blockRole = blockRole || (room.actionState.type === 'FOREIGN_AID' || room.actionState.type === 'DUKE' ? '공작' : (room.actionState.type === 'AMBASSADOR' ? '외교관' : '사령관'));
 
         room.actionState.phase = 'WAIT_CHALLENGE';
@@ -658,7 +728,6 @@ function processRevealCard(room, roomCode, revealerId, cardIndex) {
     
     let isSuccess = false;
 
-    // [FIX] 강탈 블락 성공 여부를 확인 시, 방해선언 역할(blockRole)과 동일한지 철저히 검증 (외교관 선언하고 사령관 내면 사망 처리)
     if (actionType === 'ASSASSIN_CHALLENGE_REVEAL') {
         isSuccess = (card.role === '자객');
     } else if (actionType === 'ASSASSIN_BLOCK_REVEAL' || actionType === 'ASSASSIN_SECOND_STRIKE_BLOCK_REVEAL') {
