@@ -1270,6 +1270,71 @@ const saboIo = io.of('/sabo');
 const saboRooms = {};
 const saboDisconnectTimers = {};
 
+function clearSaboTimer(room) {
+    if (room.timer && room.timer.timeoutId) { 
+        clearTimeout(room.timer.timeoutId); 
+        room.timer.timeoutId = null; 
+    }
+    room.timer = null;
+}
+
+function startSaboTimer(room, roomCode, durationSec) {
+    clearSaboTimer(room);
+    const durationMs = durationSec * 1000;
+    const endTime = Date.now() + durationMs;
+    room.timer = {
+        endTime: endTime,
+        duration: durationSec,
+        timeoutId: setTimeout(() => {
+            if (room.timer && room.timer.endTime === endTime) {
+                room.timer = null;
+                autoPlaySaboTurn(room, roomCode);
+            }
+        }, durationMs)
+    };
+    // 갱신된 타이머 상태 클라이언트로 전송
+    saboIo.to(roomCode).emit('roomUpdate', room);
+}
+
+function autoPlaySaboTurn(room, roomCode) {
+    const player = room.players.find(p => p.id === room.turnId);
+    if (player) {
+        if (player.hand && player.hand.length > 0) {
+            const randomIdx = Math.floor(Math.random() * player.hand.length);
+            const discardCard = player.hand[randomIdx];
+            player.hand = player.hand.filter(c => c.id !== discardCard.id);
+            if (room.deck.length > 0) player.hand.push(room.deck.pop());
+        }
+        saboIo.to(roomCode).emit('actionAnnounce', { actorName: '시스템', actionText: `시간 초과! ${player.name}님의 턴이 강제로 넘어갑니다.` });
+    }
+    
+    room.deckCount = room.deck.length;
+
+    let isGameOver = true;
+    for (let p of room.players) {
+        if (p.hand && p.hand.length > 0) {
+            isGameOver = false;
+            break;
+        }
+    }
+
+    if (isGameOver && room.deckCount === 0) {
+        room.phase = 'GAME_OVER';
+    } else {
+        let loopCount = 0;
+        do {
+            room.turnIndex = (room.turnIndex + 1) % room.players.length;
+            room.turnId = room.players[room.turnIndex].id;
+            loopCount++;
+        } while (
+            (!room.players[room.turnIndex].hand || room.players[room.turnIndex].hand.length === 0) && 
+            loopCount < room.players.length
+        );
+        startSaboTimer(room, roomCode, 60);
+    }
+    saboIo.to(roomCode).emit('roomUpdate', room);
+}
+
 const SABO_ACTION_CARD_IMAGES = {
     '수리_곡괭이_수레': 'https://masi4882.dothome.co.kr/sabo/51.jpg',
     '수리_곡괭이_랜턴': 'https://masi4882.dothome.co.kr/sabo/52.jpg',
@@ -1370,7 +1435,7 @@ saboIo.on('connection', (socket) => {
             if (!saboRooms[roomCode]) {
                 saboRooms[roomCode] = { 
                     roomCode, phase: 'LOBBY', players: [], spectators: [], timeouts: new Set(),
-                    turnIndex: 0, board: [] 
+                    turnIndex: 0, board: [], timer: null
                 };
             }
             const room = saboRooms[roomCode];
@@ -1460,6 +1525,10 @@ saboIo.on('connection', (socket) => {
             room.turnId = room.players[room.turnIndex].id;
             
             saboIo.to(roomCode).emit('gameStarted', room);
+
+            // 게임 시작과 함께 첫 턴 타이머 60초 시작
+            startSaboTimer(room, roomCode, 60);
+
         } catch(e) { console.error('Sabo startGame error:', e); }
     });
 
@@ -1470,6 +1539,9 @@ saboIo.on('connection', (socket) => {
 
             const player = room.players.find(p => p.id === socket.id);
             if (!player || room.turnId !== socket.id) return; 
+
+            // 액션이 들어오면 현재 타이머를 초기화함
+            clearSaboTimer(room);
 
             if (isDiscard) {
                 const discardCards = cards || (card ? [card] : []);
@@ -1482,73 +1554,75 @@ saboIo.on('connection', (socket) => {
                     }
                 }
             } else {
-                if (!card) return;
-                const target = targetId ? room.players.find(p => p.id === targetId || p.userId === targetId) : null;
-                const d = (card.desc || '').replace(/\s+/g, '');
+                if (card) {
+                    const target = targetId ? room.players.find(p => p.id === targetId || p.userId === targetId) : null;
+                    const d = (card.desc || '').replace(/\s+/g, '');
 
-                if (target) {
-                    if (d.includes('파괴') || d.includes('수리')) {
-                        if (d.includes('파괴')) {
-                            if (equipType) target.tools[equipType] = false;
-                            else {
-                                if (d.includes('곡괭이')) target.tools.pickaxe = false;
-                                if (d.includes('랜턴')) target.tools.lantern = false;
-                                if (d.includes('수레')) target.tools.cart = false;
-                            }
-                        } else if (d.includes('수리')) {
-                            if (equipType) target.tools[equipType] = true;
-                            else {
-                                if (d.includes('곡괭이')) target.tools.pickaxe = true;
-                                if (d.includes('랜턴')) target.tools.lantern = true;
-                                if (d.includes('수레')) target.tools.cart = true;
+                    if (target) {
+                        if (d.includes('파괴') || d.includes('수리')) {
+                            if (d.includes('파괴')) {
+                                if (equipType) target.tools[equipType] = false;
+                                else {
+                                    if (d.includes('곡괭이')) target.tools.pickaxe = false;
+                                    if (d.includes('랜턴')) target.tools.lantern = false;
+                                    if (d.includes('수레')) target.tools.cart = false;
+                                }
+                            } else if (d.includes('수리')) {
+                                if (equipType) target.tools[equipType] = true;
+                                else {
+                                    if (d.includes('곡괭이')) target.tools.pickaxe = true;
+                                    if (d.includes('랜턴')) target.tools.lantern = true;
+                                    if (d.includes('수레')) target.tools.cart = true;
+                                }
                             }
                         }
+                        else if (d.includes('염탐') || d.includes('정보확인')) {
+                            socket.emit('spyResult', { targetName: target.name, role: target.role });
+                        } 
+                        else if (d.includes('직업바꾸기') || d.includes('직업교체') || d.includes('모자교환')) {
+                            const ROLES = ['파란광부', '초록광부', '대장', '부당이익자', '지질학자', '방해꾼'];
+                            target.role = ROLES[Math.floor(Math.random() * ROLES.length)];
+                        }
+                        else if (d.includes('도둑방지') || d.includes('도둑막기') || d.includes('도둑잡기')) {
+                            target.thief = false;
+                        }
+                        else if (d.includes('도둑')) {
+                            player.thief = true;
+                        }
+                        else if (d.includes('감옥탈출') || d.includes('탈옥') || d.includes('감옥해방')) {
+                            target.trapped = false;
+                        }
+                        else if (d.includes('감옥')) {
+                            target.trapped = true;
+                        }
+                    } else if (slot) {
+                        if (d.includes('낙석') || d.includes('붕괴') || d.includes('길파괴')) {
+                            const bIdx = room.board.findIndex(c => c.col === slot.col && c.row === slot.row);
+                            if (bIdx !== -1) room.board.splice(bIdx, 1);
+                        } else if (card.type === 'path') {
+                            if (!room.board) room.board = [];
+                            room.board.push({
+                                id: card.id,
+                                type: card.type,
+                                desc: card.desc,
+                                imgCode: card.imgCode,
+                                col: slot.col,
+                                row: slot.row,
+                                isRotated: isRotated || false 
+                            });
+                        }
                     }
-                    else if (d.includes('염탐') || d.includes('정보확인')) {
-                        socket.emit('spyResult', { targetName: target.name, role: target.role });
-                    } 
-                    else if (d.includes('직업바꾸기') || d.includes('직업교체') || d.includes('모자교환')) {
-                        const ROLES = ['파란광부', '초록광부', '대장', '부당이익자', '지질학자', '방해꾼'];
-                        target.role = ROLES[Math.floor(Math.random() * ROLES.length)];
-                    }
-                    else if (d.includes('도둑방지') || d.includes('도둑막기') || d.includes('도둑잡기')) {
-                        target.thief = false;
-                    }
-                    else if (d.includes('도둑')) {
-                        player.thief = true;
-                    }
-                    else if (d.includes('감옥탈출') || d.includes('탈옥') || d.includes('감옥해방')) {
-                        target.trapped = false;
-                    }
-                    else if (d.includes('감옥')) {
-                        target.trapped = true;
-                    }
-                } else if (slot) {
-                    if (d.includes('낙석') || d.includes('붕괴') || d.includes('길파괴')) {
-                        const bIdx = room.board.findIndex(c => c.col === slot.col && c.row === slot.row);
-                        if (bIdx !== -1) room.board.splice(bIdx, 1);
-                    } else if (card.type === 'path') {
-                        if (!room.board) room.board = [];
-                        room.board.push({
-                            id: card.id,
-                            type: card.type,
-                            desc: card.desc,
-                            imgCode: card.imgCode,
-                            col: slot.col,
-                            row: slot.row,
-                            isRotated: isRotated || false 
-                        });
-                    }
-                }
 
-                player.hand = player.hand.filter(c => c.id !== card.id);
-                if(room.deck.length > 0) {
-                    player.hand.push(room.deck.pop());
+                    player.hand = player.hand.filter(c => c.id !== card.id);
+                    if(room.deck.length > 0) {
+                        player.hand.push(room.deck.pop());
+                    }
                 }
             }
 
             room.deckCount = room.deck.length;
 
+            // 게임 오버 여부 및 턴 패스 확인
             let isGameOver = true;
             for (let p of room.players) {
                 if (p.hand && p.hand.length > 0) {
@@ -1569,6 +1643,9 @@ saboIo.on('connection', (socket) => {
                     (!room.players[room.turnIndex].hand || room.players[room.turnIndex].hand.length === 0) && 
                     loopCount < room.players.length
                 );
+                
+                // 정상적으로 다음 턴이 지정되었으므로 다시 60초 타이머 시작
+                startSaboTimer(room, roomCode, 60);
             }
 
             saboIo.to(roomCode).emit('roomUpdate', room);
@@ -1596,6 +1673,7 @@ saboIo.on('connection', (socket) => {
                     if (wasTheirTurn) {
                         room.turnIndex = room.turnIndex % room.players.length;
                         room.turnId = room.players[room.turnIndex].id;
+                        startSaboTimer(room, roomCode, 60); // 방 나간 사람 턴이었다면 다음 사람 턴으로 넘어감
                     } else {
                         const currentTurnPlayer = room.players.find(p => p.id === room.turnId);
                         if (currentTurnPlayer) {
@@ -1655,6 +1733,7 @@ saboIo.on('connection', (socket) => {
                                     if (wasTheirTurn) {
                                         currentRoom.turnIndex = currentRoom.turnIndex % currentRoom.players.length;
                                         currentRoom.turnId = currentRoom.players[currentRoom.turnIndex].id;
+                                        startSaboTimer(currentRoom, roomCode, 60);
                                     } else {
                                         const currentTurnPlayer = currentRoom.players.find(p => p.id === currentRoom.turnId);
                                         if (currentTurnPlayer) {
