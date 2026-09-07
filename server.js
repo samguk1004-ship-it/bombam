@@ -235,12 +235,10 @@ pokerIo.on('connection', (socket) => {
             if (playerIndex === -1) return;
             
             const player = room.players[playerIndex];
-            
             if (playerIndex === 0 && room.players.some(p => p.isBot) && !player.isSpectator) { 
                 destroyRoom(pokerRooms, null, roomCode, pokerIo, '방장이 퇴장하여 방이 폭파되었습니다.'); 
                 return; 
             }
-            
             room.players.splice(playerIndex, 1);
             socket.leave(roomCode);
             
@@ -260,7 +258,6 @@ pokerIo.on('connection', (socket) => {
                         destroyRoom(pokerRooms, null, roomCode, pokerIo, '방장의 연결이 끊겨 방이 폭파되었습니다.'); 
                         continue; 
                     }
-                    
                     if (room.phase === 'LOBBY' || player.isSpectator) {
                         room.players.splice(playerIndex, 1);
                         if (room.players.length === 0) destroyRoom(pokerRooms, null, roomCode, pokerIo); 
@@ -1287,42 +1284,53 @@ const SABO_ACTION_CARD_IMAGES = {
     '파괴_수레': 'https://masi4882.dothome.co.kr/sabo/61.jpg'
 };
 
+// ★ 딜럭스 룰: 덱 122장(굴 74 + 행동 48) 생성
 function createSaboDeck() {
     const deck = [];
     let idCounter = 1;
 
+    // 1. 굴 카드 (74장) - 기본판 44 + 확장 30
+    for (let i = 0; i < 74; i++) {
+        deck.push({ id: `c${idCounter++}`, type: 'path', desc: '굴 카드', isPlayable: true });
+    }
+
+    // 2. 행동 카드 생성 함수
     const addAction = (desc, imgKey, count) => {
         for (let i = 0; i < count; i++) {
             deck.push({ 
                 id: `c${idCounter++}`, 
                 type: 'action', 
                 desc: desc, 
-                img: SABO_ACTION_CARD_IMAGES[imgKey], 
+                img: imgKey ? SABO_ACTION_CARD_IMAGES[imgKey] : null, 
                 isPlayable: true 
             });
         }
     };
 
+    // [기본판 행동 카드 27장]
     addAction('곡괭이 파괴', '파괴_곡괭이', 3);
     addAction('랜턴 파괴', '파괴_랜턴', 3);
     addAction('수레 파괴', '파괴_수레', 3);
-    
     addAction('곡괭이 수리', '수리_곡괭이', 2);
     addAction('랜턴 수리', '수리_랜턴', 2);
     addAction('수레 수리', '수리_수레', 2);
-    
     addAction('곡괭이/수레 수리', '수리_곡괭이_수레', 1);
     addAction('곡괭이/랜턴 수리', '수리_곡괭이_랜턴', 1);
     addAction('랜턴/수레 수리', '수리_랜턴_수레', 1);
-    
     addAction('도착점 확인', '도착점확인', 6);
     addAction('낙석', '낙석', 3);
 
-    for (let i = 0; i < 40; i++) {
-        deck.push({ id: `c${idCounter++}`, type: 'path', desc: '십자 길', isPlayable: true });
-    }
+    // [사보타지 2 확장 행동 카드 21장] (텍스트로 렌더링되게 구성)
+    addAction('도둑', null, 4);
+    addAction('도둑 잡기', null, 3);
+    addAction('감옥', null, 3);
+    addAction('감옥 해방', null, 4);
+    addAction('모자 교환', null, 2);
+    addAction('카드 교체', null, 2);
+    addAction('정보 확인', null, 2);
+    addAction('버리기', null, 1);
 
-    return deck.sort(() => Math.random() - 0.5);
+    return deck.sort(() => Math.random() - 0.5); // 무작위 셔플
 }
 
 saboIo.on('connection', (socket) => {
@@ -1390,16 +1398,29 @@ saboIo.on('connection', (socket) => {
             room.round = 1;
             room.maxRound = 3;
             
-            room.deck = createSaboDeck();
+            // ★ 딜럭스 룰 적용
+            room.deck = createSaboDeck(); // 122장
+            room.deck.splice(0, 10); // 10장 무조건 태우기 (게임 제외)
             
-            // ★ 모든 플레이어가 인원수와 상관없이 "무조건 6장"을 지급받도록 강제 고정
+            // 직업 카드 15장 세팅
+            let roleDeck = [
+                '파란광부', '파란광부', '파란광부', '파란광부',
+                '초록광부', '초록광부', '초록광부', '초록광부',
+                '대장', '부당이익자', '지질학자', '지질학자',
+                '방해꾼', '방해꾼', '방해꾼'
+            ].sort(() => Math.random() - 0.5);
+
+            // ★ 인원 무관 6장 배분 (딜럭스 룰)
             const cardsPerPlayer = 6;
             
             room.players.forEach(p => {
+                p.role = roleDeck.pop(); // 무작위로 1명당 1장씩 직업 할당
+                
                 p.hand = [];
                 for(let i=0; i<cardsPerPlayer; i++) {
                     if(room.deck.length > 0) p.hand.push(room.deck.pop());
                 }
+                
                 p.gold = 0;
                 p.tools = { pickaxe: true, lantern: true, cart: true };
                 p.thief = false;
