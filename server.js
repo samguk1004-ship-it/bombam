@@ -1290,6 +1290,7 @@ function startSaboTimer(room, roomCode, durationSec) {
     clearSaboTimer(room);
     const durationMs = durationSec * 1000;
     const endTime = Date.now() + durationMs;
+    
     room.timer = {
         endTime: endTime,
         duration: durationSec,
@@ -1327,6 +1328,7 @@ function autoPlaySaboTurn(room, roomCode) {
 
     if (isGameOver && room.deckCount === 0) {
         room.phase = 'GAME_OVER';
+        emitSaboUpdate(roomCode, room);
     } else {
         let loopCount = 0;
         do {
@@ -1339,7 +1341,6 @@ function autoPlaySaboTurn(room, roomCode) {
         );
         startSaboTimer(room, roomCode, 60);
     }
-    emitSaboUpdate(roomCode, room);
 }
 
 const SABO_ACTION_CARD_IMAGES = {
@@ -1368,22 +1369,13 @@ function createSaboDeck() {
 
     const addPathCards = (imgCode, count, type, desc) => {
         for (let i = 0; i < count; i++) {
-            deck.push({ 
-                id: `c${idCounter++}`, 
-                type: type, 
-                desc: desc, 
-                imgCode: imgCode, 
-                isPlayable: true 
-            });
+            deck.push({ id: `c${idCounter++}`, type: type, desc: desc, imgCode: imgCode, isPlayable: true });
         }
     };
 
-    addPathCards('03', 4, 'path', '일반 길');
-    addPathCards('04', 3, 'path', '일반 길');
-    addPathCards('05', 5, 'path', '일반 길');
-    addPathCards('06', 4, 'path', '일반 길');
-    addPathCards('07', 5, 'path', '일반 길');
-    addPathCards('08', 5, 'path', '일반 길');
+    addPathCards('03', 4, 'path', '일반 길'); addPathCards('04', 3, 'path', '일반 길');
+    addPathCards('05', 5, 'path', '일반 길'); addPathCards('06', 4, 'path', '일반 길');
+    addPathCards('07', 5, 'path', '일반 길'); addPathCards('08', 5, 'path', '일반 길');
     addPathCards('09', 5, 'path', '일반 길');
     
     const singlePathCodes = ['10','11','12','13','14','15','16','17','18','21','22','23','24','25','26','27','28'];
@@ -1397,38 +1389,20 @@ function createSaboDeck() {
 
     ['41','42','43'].forEach(code => addPathCards(code, 1, 'path', '초록문 길'));
     ['44','45','46'].forEach(code => addPathCards(code, 1, 'path', '파란문 길'));
-
     ['47','48','49','50'].forEach(code => addPathCards(code, 1, 'path', '사다리 길 (시작점)'));
 
     const addAction = (desc, imgKey, count) => {
         for (let i = 0; i < count; i++) {
-            deck.push({ 
-                id: `c${idCounter++}`, 
-                type: 'action', 
-                desc: desc, 
-                img: imgKey ? SABO_ACTION_CARD_IMAGES[imgKey] : null, 
-                isPlayable: true 
-            });
+            deck.push({ id: `c${idCounter++}`, type: 'action', desc: desc, img: imgKey ? SABO_ACTION_CARD_IMAGES[imgKey] : null, isPlayable: true });
         }
     };
 
-    addAction('곡괭이 파괴', '파괴_곡괭이', 3);
-    addAction('랜턴 파괴', '파괴_랜턴', 3);
-    addAction('수레 파괴', '파괴_수레', 3);
-    addAction('곡괭이 수리', '수리_곡괭이', 2);
-    addAction('랜턴 수리', '수리_랜턴', 2);
-    addAction('수레 수리', '수리_수레', 2);
-    addAction('곡괭이/수레 수리', '수리_곡괭이_수레', 1);
-    addAction('곡괭이/랜턴 수리', '수리_곡괭이_랜턴', 1);
-    addAction('랜턴/수레 수리', '수리_랜턴_수레', 1);
-    addAction('도착점 확인', '도착점확인', 6);
-    addAction('낙석', '낙석', 3);
-    addAction('도둑', '도둑', 4);
-    addAction('도둑 방지', '도둑방지', 3);
-    addAction('감옥', '감옥', 3);
-    addAction('감옥 탈출', '감옥탈출', 4);
-    addAction('직업 바꾸기', '직업바꾸기', 2);
-    addAction('염탐', '염탐', 2);
+    addAction('곡괭이 파괴', '파괴_곡괭이', 3); addAction('랜턴 파괴', '파괴_랜턴', 3); addAction('수레 파괴', '파괴_수레', 3);
+    addAction('곡괭이 수리', '수리_곡괭이', 2); addAction('랜턴 수리', '수리_랜턴', 2); addAction('수레 수리', '수리_수레', 2);
+    addAction('곡괭이/수레 수리', '수리_곡괭이_수레', 1); addAction('곡괭이/랜턴 수리', '수리_곡괭이_랜턴', 1); addAction('랜턴/수레 수리', '수리_랜턴_수레', 1);
+    addAction('도착점 확인', '도착점확인', 6); addAction('낙석', '낙석', 3); addAction('도둑', '도둑', 4);
+    addAction('도둑 방지', '도둑방지', 3); addAction('감옥', '감옥', 3); addAction('감옥 탈출', '감옥탈출', 4);
+    addAction('직업 바꾸기', '직업바꾸기', 2); addAction('염탐', '염탐', 2);
 
     return deck.sort(() => Math.random() - 0.5); 
 }
@@ -1454,29 +1428,19 @@ saboIo.on('connection', (socket) => {
             }
 
             let existingPlayer = room.players.find(p => (userId && p.userId === userId) || p.name === userName);
-            
             if (!existingPlayer) {
                 const isSpectator = room.phase !== 'LOBBY';
                 room.players.push({
-                    id: socket.id, 
-                    name: userName, 
-                    userId, 
-                    isBot, 
-                    ready: room.players.length === 0, 
-                    gold: 0, 
-                    tools: { pickaxe: true, lantern: true, cart: true }, 
-                    thief: false, 
-                    trapped: false,
-                    hand: [], 
-                    connected: true, 
-                    isSpectator
+                    id: socket.id, name: userName, userId, isBot, ready: room.players.length === 0, 
+                    gold: 0, tools: { pickaxe: true, lantern: true, cart: true }, thief: false, trapped: false,
+                    hand: [], connected: true, isSpectator
                 });
             } else {
                 existingPlayer.id = socket.id;
                 existingPlayer.connected = true;
             }
             emitSaboUpdate(roomCode, room);
-        } catch(e) { console.error('Sabo joinRoom error:', e); }
+        } catch(e) {}
     });
 
     socket.on('playerReady', ({ roomCode, ready }) => {
@@ -1484,12 +1448,9 @@ saboIo.on('connection', (socket) => {
             const room = saboRooms[roomCode];
             if (room) {
                 const player = room.players.find(p => p.id === socket.id);
-                if (player) { 
-                    player.ready = ready; 
-                    emitSaboUpdate(roomCode, room); 
-                }
+                if (player) { player.ready = ready; emitSaboUpdate(roomCode, room); }
             }
-        } catch(e) { console.error('Sabo playerReady error:', e); }
+        } catch(e) {}
     });
 
     socket.on('startGame', (roomCode) => {
@@ -1497,47 +1458,30 @@ saboIo.on('connection', (socket) => {
             const room = saboRooms[roomCode];
             if (!room || room.players.length === 0) return;
             
-            room.phase = 'GAME';
-            room.round = 1;
-            room.maxRound = 3;
-            room.board = []; 
-            
-            room.deck = createSaboDeck(); 
-            room.deck.splice(0, 10); 
+            room.phase = 'GAME'; room.round = 1; room.maxRound = 3; room.board = []; 
+            room.deck = createSaboDeck(); room.deck.splice(0, 10); 
             
             let roleDeck = [
-                '파란광부', '파란광부', '파란광부', '파란광부',
-                '초록광부', '초록광부', '초록광부', '초록광부',
-                '대장', '부당이익자', '지질학자', '지질학자',
-                '방해꾼', '방해꾼', '방해꾼'
+                '파란광부', '파란광부', '파란광부', '파란광부', '초록광부', '초록광부', '초록광부', '초록광부',
+                '대장', '부당이익자', '지질학자', '지질학자', '방해꾼', '방해꾼', '방해꾼'
             ].sort(() => Math.random() - 0.5);
 
-            const cardsPerPlayer = 6;
-            
             room.players.forEach(p => {
                 p.role = roleDeck.pop();
                 p.hand = [];
-                for(let i=0; i<cardsPerPlayer; i++) {
-                    if(room.deck.length > 0) p.hand.push(room.deck.pop());
-                }
-                p.gold = 0;
-                p.tools = { pickaxe: true, lantern: true, cart: true };
-                p.thief = false;
-                p.trapped = false;
+                for(let i=0; i<6; i++) { if(room.deck.length > 0) p.hand.push(room.deck.pop()); }
+                p.gold = 0; p.tools = { pickaxe: true, lantern: true, cart: true };
+                p.thief = false; p.trapped = false;
             });
             
             room.deckCount = room.deck.length;
-            
-            // 다시 랜덤으로 첫 턴 시작 지정
             room.turnIndex = Math.floor(Math.random() * room.players.length);
             room.turnId = room.players[room.turnIndex].id;
             
             saboIo.to(roomCode).emit('gameStarted', room);
-
-            // 게임 시작과 함께 첫 턴 타이머 60초 시작
             startSaboTimer(room, roomCode, 60);
 
-        } catch(e) { console.error('Sabo startGame error:', e); }
+        } catch(e) {}
     });
 
     socket.on('playCard', ({ roomCode, card, cards, targetId, slot, isRotated, isDiscard, equipType }) => {
@@ -1548,7 +1492,6 @@ saboIo.on('connection', (socket) => {
             const player = room.players.find(p => p.id === socket.id);
             if (!player || room.turnId !== socket.id) return; 
 
-            // 액션이 들어오면 현재 타이머를 초기화함
             clearSaboTimer(room);
 
             if (isDiscard) {
@@ -1556,10 +1499,7 @@ saboIo.on('connection', (socket) => {
                 if (discardCards.length > 0) {
                     const discardIds = discardCards.map(c => c.id);
                     player.hand = player.hand.filter(c => !discardIds.includes(c.id));
-                    
-                    for (let i = 0; i < discardIds.length; i++) {
-                        if (room.deck.length > 0) player.hand.push(room.deck.pop());
-                    }
+                    for (let i = 0; i < discardIds.length; i++) { if (room.deck.length > 0) player.hand.push(room.deck.pop()); }
                 }
             } else {
                 if (card) {
@@ -1570,38 +1510,28 @@ saboIo.on('connection', (socket) => {
                         if (d.includes('파괴') || d.includes('수리')) {
                             if (d.includes('파괴')) {
                                 if (equipType) target.tools[equipType] = false;
-                                else {
-                                    if (d.includes('곡괭이')) target.tools.pickaxe = false;
-                                    if (d.includes('랜턴')) target.tools.lantern = false;
-                                    if (d.includes('수레')) target.tools.cart = false;
-                                }
+                                else { if (d.includes('곡괭이')) target.tools.pickaxe = false; if (d.includes('랜턴')) target.tools.lantern = false; if (d.includes('수레')) target.tools.cart = false; }
                             } else if (d.includes('수리')) {
                                 if (equipType) target.tools[equipType] = true;
-                                else {
-                                    if (d.includes('곡괭이')) target.tools.pickaxe = true;
-                                    if (d.includes('랜턴')) target.tools.lantern = true;
-                                    if (d.includes('수레')) target.tools.cart = true;
-                                }
+                                else { if (d.includes('곡괭이')) target.tools.pickaxe = true; if (d.includes('랜턴')) target.tools.lantern = true; if (d.includes('수레')) target.tools.cart = true; }
                             }
                         }
-                        else if (d.includes('염탐') || d.includes('정보확인')) {
-                            socket.emit('spyResult', { targetName: target.name, role: target.role });
-                        } 
+                        else if (d.includes('염탐') || d.includes('정보확인')) { socket.emit('spyResult', { targetName: target.name, role: target.role }); } 
                         else if (d.includes('직업바꾸기') || d.includes('직업교체') || d.includes('모자교환')) {
                             const ROLES = ['파란광부', '초록광부', '대장', '부당이익자', '지질학자', '방해꾼'];
                             target.role = ROLES[Math.floor(Math.random() * ROLES.length)];
                         }
                         else if (d.includes('도둑방지') || d.includes('도둑막기') || d.includes('도둑잡기')) {
-                            target.thief = false;
+                            if (target.thief) target.thief = false;
                         }
                         else if (d.includes('도둑')) {
                             player.thief = true;
                         }
                         else if (d.includes('감옥탈출') || d.includes('탈옥') || d.includes('감옥해방')) {
-                            target.trapped = false;
+                            if (target.trapped) target.trapped = false;
                         }
-                        else if (d.includes('감옥')) {
-                            target.trapped = true;
+                        else if (d.includes('감옥') && !d.includes('탈출')) {
+                            if (!target.trapped) target.trapped = true;
                         }
                     } else if (slot) {
                         if (d.includes('낙석') || d.includes('붕괴') || d.includes('길파괴')) {
@@ -1609,35 +1539,18 @@ saboIo.on('connection', (socket) => {
                             if (bIdx !== -1) room.board.splice(bIdx, 1);
                         } else if (card.type === 'path') {
                             if (!room.board) room.board = [];
-                            room.board.push({
-                                id: card.id,
-                                type: card.type,
-                                desc: card.desc,
-                                imgCode: card.imgCode,
-                                col: slot.col,
-                                row: slot.row,
-                                isRotated: isRotated || false 
-                            });
+                            room.board.push({ id: card.id, type: card.type, desc: card.desc, imgCode: card.imgCode, col: slot.col, row: slot.row, isRotated: isRotated || false });
                         }
                     }
-
                     player.hand = player.hand.filter(c => c.id !== card.id);
-                    if(room.deck.length > 0) {
-                        player.hand.push(room.deck.pop());
-                    }
+                    if(room.deck.length > 0) { player.hand.push(room.deck.pop()); }
                 }
             }
 
             room.deckCount = room.deck.length;
 
-            // 게임 오버 여부 및 턴 패스 확인
             let isGameOver = true;
-            for (let p of room.players) {
-                if (p.hand && p.hand.length > 0) {
-                    isGameOver = false;
-                    break;
-                }
-            }
+            for (let p of room.players) { if (p.hand && p.hand.length > 0) { isGameOver = false; break; } }
 
             if (isGameOver && room.deckCount === 0) {
                 room.phase = 'GAME_OVER';
@@ -1647,110 +1560,57 @@ saboIo.on('connection', (socket) => {
                     room.turnIndex = (room.turnIndex + 1) % room.players.length;
                     room.turnId = room.players[room.turnIndex].id;
                     loopCount++;
-                } while (
-                    (!room.players[room.turnIndex].hand || room.players[room.turnIndex].hand.length === 0) && 
-                    loopCount < room.players.length
-                );
+                } while ((!room.players[room.turnIndex].hand || room.players[room.turnIndex].hand.length === 0) && loopCount < room.players.length);
                 
-                // 정상적으로 다음 턴이 지정되었으므로 다시 60초 타이머 시작
                 startSaboTimer(room, roomCode, 60);
             }
 
             emitSaboUpdate(roomCode, room);
-        } catch(e) { console.error('Sabo playCard error:', e); }
+        } catch(e) {}
     });
 
     socket.on('leaveRoom', (roomCode) => {
         try {
-            const room = saboRooms[roomCode];
-            if (!room) return;
-
-            if (room.players.length > 0 && room.players[0].id === socket.id && room.players.some(p => p.isBot)) {
-                destroyRoom(saboRooms, saboDisconnectTimers, roomCode, saboIo, '방장이 퇴장하여 방이 폭파되었습니다.');
-                return;
-            }
-
-            const wasTheirTurn = room.turnId === socket.id;
-            room.players = room.players.filter(p => p.id !== socket.id);
-            socket.leave(roomCode);
-            
-            if (room.players.length === 0) {
-                destroyRoom(saboRooms, saboDisconnectTimers, roomCode, saboIo);
-            } else {
+            const room = saboRooms[roomCode]; if (!room) return;
+            if (room.players.length > 0 && room.players[0].id === socket.id && room.players.some(p => p.isBot)) { destroyRoom(saboRooms, saboDisconnectTimers, roomCode, saboIo, '방장이 퇴장하여 방이 폭파되었습니다.'); return; }
+            const wasTheirTurn = room.turnId === socket.id; room.players = room.players.filter(p => p.id !== socket.id); socket.leave(roomCode);
+            if (room.players.length === 0) { destroyRoom(saboRooms, saboDisconnectTimers, roomCode, saboIo); } 
+            else {
                 if (room.phase === 'GAME') {
-                    if (wasTheirTurn) {
-                        room.turnIndex = room.turnIndex % room.players.length;
-                        room.turnId = room.players[room.turnIndex].id;
-                        startSaboTimer(room, roomCode, 60); // 방 나간 사람 턴이었다면 다음 사람 턴으로 넘어감
-                    } else {
+                    if (wasTheirTurn) { room.turnIndex = room.turnIndex % room.players.length; room.turnId = room.players[room.turnIndex].id; startSaboTimer(room, roomCode, 60); } 
+                    else {
                         const currentTurnPlayer = room.players.find(p => p.id === room.turnId);
-                        if (currentTurnPlayer) {
-                            room.turnIndex = room.players.findIndex(p => p.id === room.turnId);
-                        } else {
-                            room.turnIndex = 0;
-                            room.turnId = room.players[0].id;
-                        }
+                        if (currentTurnPlayer) { room.turnIndex = room.players.findIndex(p => p.id === room.turnId); } 
+                        else { room.turnIndex = 0; room.turnId = room.players[0].id; }
                     }
                 }
                 emitSaboUpdate(roomCode, room);
             }
-        } catch(e){ console.error('Sabo leaveRoom error:', e); }
+        } catch(e){}
     });
 
     socket.on('disconnect', () => {
         try {
             for (let roomCode in saboRooms) {
-                const room = saboRooms[roomCode];
-                const playerIndex = room.players.findIndex(p => p.id === socket.id);
-                
+                const room = saboRooms[roomCode]; const playerIndex = room.players.findIndex(p => p.id === socket.id);
                 if (playerIndex !== -1) {
                     const player = room.players[playerIndex];
-
-                    if (playerIndex === 0 && room.players.some(p => p.isBot)) {
-                        destroyRoom(saboRooms, saboDisconnectTimers, roomCode, saboIo, '방장의 연결이 끊겨 방이 폭파되었습니다.');
-                        continue;
-                    }
-
-                    player.connected = false;
-                    const disconnectKey = `${roomCode}_${player.userId}`;
-                    
+                    if (playerIndex === 0 && room.players.some(p => p.isBot)) { destroyRoom(saboRooms, saboDisconnectTimers, roomCode, saboIo, '방장의 연결이 끊겨 방이 폭파되었습니다.'); continue; }
+                    player.connected = false; const disconnectKey = `${roomCode}_${player.userId}`;
                     if (saboDisconnectTimers[disconnectKey]) clearTimeout(saboDisconnectTimers[disconnectKey]);
-                    
                     if (room.phase === 'LOBBY') {
                         room.players.splice(playerIndex, 1);
-                        if (room.players.length === 0) {
-                            destroyRoom(saboRooms, saboDisconnectTimers, roomCode, saboIo);
-                        } else {
-                            emitSaboUpdate(roomCode, room);
-                        }
+                        if (room.players.length === 0) { destroyRoom(saboRooms, saboDisconnectTimers, roomCode, saboIo); } else { emitSaboUpdate(roomCode, room); }
                     } else {
                         emitSaboUpdate(roomCode, room);
-                        
                         saboDisconnectTimers[disconnectKey] = setTimeout(() => {
-                            delete saboDisconnectTimers[disconnectKey];
-                            const currentRoom = saboRooms[roomCode];
-                            if (!currentRoom) return;
-                            
-                            const wasTheirTurn = currentRoom.turnId === player.id;
-                            currentRoom.players = currentRoom.players.filter(p => p.userId !== player.userId);
-                            
-                            if (currentRoom.players.length === 0) {
-                                destroyRoom(saboRooms, saboDisconnectTimers, roomCode, saboIo);
-                            } else {
+                            delete saboDisconnectTimers[disconnectKey]; const currentRoom = saboRooms[roomCode]; if (!currentRoom) return;
+                            const wasTheirTurn = currentRoom.turnId === player.id; currentRoom.players = currentRoom.players.filter(p => p.userId !== player.userId);
+                            if (currentRoom.players.length === 0) { destroyRoom(saboRooms, saboDisconnectTimers, roomCode, saboIo); } 
+                            else {
                                 if (currentRoom.phase === 'GAME') {
-                                    if (wasTheirTurn) {
-                                        currentRoom.turnIndex = currentRoom.turnIndex % currentRoom.players.length;
-                                        currentRoom.turnId = currentRoom.players[currentRoom.turnIndex].id;
-                                        startSaboTimer(currentRoom, roomCode, 60);
-                                    } else {
-                                        const currentTurnPlayer = currentRoom.players.find(p => p.id === currentRoom.turnId);
-                                        if (currentTurnPlayer) {
-                                            currentRoom.turnIndex = currentRoom.players.findIndex(p => p.id === currentRoom.turnId);
-                                        } else {
-                                            currentRoom.turnIndex = 0;
-                                            currentRoom.turnId = currentRoom.players[0].id;
-                                        }
-                                    }
+                                    if (wasTheirTurn) { currentRoom.turnIndex = currentRoom.turnIndex % currentRoom.players.length; currentRoom.turnId = currentRoom.players[currentRoom.turnIndex].id; startSaboTimer(currentRoom, roomCode, 60); } 
+                                    else { const currentTurnPlayer = currentRoom.players.find(p => p.id === currentRoom.turnId); if (currentTurnPlayer) { currentRoom.turnIndex = currentRoom.players.findIndex(p => p.id === currentRoom.turnId); } else { currentRoom.turnIndex = 0; currentRoom.turnId = currentRoom.players[0].id; } }
                                 }
                                 emitSaboUpdate(roomCode, currentRoom);
                             }
@@ -1758,7 +1618,7 @@ saboIo.on('connection', (socket) => {
                     }
                 }
             }
-        } catch(e) { console.error('Sabo disconnect error:', e); }
+        } catch(e) {}
     });
 });
 
