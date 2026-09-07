@@ -349,7 +349,14 @@ const coupRooms = {};
 const coupDisconnectTimers = {}; 
 
 function emitCoupUpdate(roomCode, room) {
-    const safeRoom = { ...room, timer: room.timer ? { endTime: room.timer.endTime, duration: room.timer.duration } : null };
+    const now = Date.now();
+    const safeRoom = { 
+        ...room, 
+        timer: room.timer ? { 
+            duration: room.timer.duration,
+            remaining: Math.max(0, (room.timer.endTime - now) / 1000)
+        } : null 
+    };
     coupIo.to(roomCode).emit('roomUpdate', safeRoom);
 }
 
@@ -1271,9 +1278,14 @@ const saboRooms = {};
 const saboDisconnectTimers = {};
 
 function emitSaboUpdate(roomCode, room) {
+    const now = Date.now();
     const safeRoom = { 
         ...room, 
-        timer: room.timer ? { endTime: room.timer.endTime, duration: room.timer.duration } : null 
+        // 서버 시계를 기반으로 "앞으로 몇 초 남았는지"를 명시적으로 계산하여 내려보냅니다.
+        timer: room.timer ? { 
+            duration: room.timer.duration,
+            remaining: Math.max(0, (room.timer.endTime - now) / 1000)
+        } : null 
     };
     saboIo.to(roomCode).emit('roomUpdate', safeRoom);
 }
@@ -1475,6 +1487,8 @@ saboIo.on('connection', (socket) => {
             });
             
             room.deckCount = room.deck.length;
+            
+            // 랜덤으로 첫 턴 시작 지정
             room.turnIndex = Math.floor(Math.random() * room.players.length);
             room.turnId = room.players[room.turnIndex].id;
             
