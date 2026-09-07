@@ -15,7 +15,7 @@ app.get('/', (req, res) => {
     res.send(`
         <div style="font-family: sans-serif; text-align: center; margin-top: 20%;">
             <h1 style="color: #4ade80;">✅ 게임 서버 정상 작동 중!</h1>
-            <p>포커, 플립7, 쿠(COUP) 모두 접속 가능한 상태입니다.</p>
+            <p>포커, 플립7, 쿠(COUP), 사보타지 모두 접속 가능한 상태입니다.</p>
         </div>
     `);
 });
@@ -1276,7 +1276,231 @@ coupIo.on('connection', (socket) => {
     });
 });
 
+// ==========================================
+// ⛏️ [4] 사보타지 전용 (Namespace: /sabo)
+// ==========================================
+const saboIo = io.of('/sabo');
+const saboRooms = {};
+const saboDisconnectTimers = {};
+
+const SABO_ACTION_CARD_IMAGES = {
+    '수리_곡괭이_수레': 'https://masi4882.dothome.co.kr/sabo/51.jpg',
+    '수리_곡괭이_랜턴': 'https://masi4882.dothome.co.kr/sabo/52.jpg',
+    '수리_랜턴_수레': 'https://masi4882.dothome.co.kr/sabo/53.jpg',
+    '도착점확인': 'https://masi4882.dothome.co.kr/sabo/54.jpg',
+    '수리_랜턴': 'https://masi4882.dothome.co.kr/sabo/55.jpg',
+    '수리_곡괭이': 'https://masi4882.dothome.co.kr/sabo/56.jpg',
+    '수리_수레': 'https://masi4882.dothome.co.kr/sabo/57.jpg',
+    '낙석': 'https://masi4882.dothome.co.kr/sabo/58.jpg',
+    '파괴_곡괭이': 'https://masi4882.dothome.co.kr/sabo/59.jpg',
+    '파괴_랜턴': 'https://masi4882.dothome.co.kr/sabo/60.jpg',
+    '파괴_수레': 'https://masi4882.dothome.co.kr/sabo/61.jpg'
+};
+
+function createSaboDeck() {
+    const deck = [];
+    let idCounter = 1;
+
+    // 행동 카드 생성 함수 (이미지가 자동으로 매핑되도록 생성)
+    const addAction = (desc, imgKey, count) => {
+        for (let i = 0; i < count; i++) {
+            deck.push({ 
+                id: `c${idCounter++}`, 
+                type: 'action', 
+                desc: desc, 
+                img: SABO_ACTION_CARD_IMAGES[imgKey], 
+                isPlayable: true 
+            });
+        }
+    };
+
+    // 행동 카드들 삽입
+    addAction('곡괭이 파괴', '파괴_곡괭이', 3);
+    addAction('랜턴 파괴', '파괴_랜턴', 3);
+    addAction('수레 파괴', '파괴_수레', 3);
+    
+    addAction('곡괭이 수리', '수리_곡괭이', 2);
+    addAction('랜턴 수리', '수리_랜턴', 2);
+    addAction('수레 수리', '수리_수레', 2);
+    
+    addAction('곡괭이/수레 수리', '수리_곡괭이_수레', 1);
+    addAction('곡괭이/랜턴 수리', '수리_곡괭이_랜턴', 1);
+    addAction('랜턴/수레 수리', '수리_랜턴_수레', 1);
+    
+    addAction('도착점 확인', '도착점확인', 6);
+    addAction('낙석', '낙석', 3);
+
+    // 기본 길 카드 더미 데이터 
+    // (이후 사보타지 길 카드 디자인이 추가되면 이 부분을 수정하시면 됩니다)
+    for (let i = 0; i < 40; i++) {
+        deck.push({ id: `c${idCounter++}`, type: 'path', desc: '십자 길', isPlayable: true });
+    }
+
+    // 덱을 무작위로 섞음
+    return deck.sort(() => Math.random() - 0.5);
+}
+
+saboIo.on('connection', (socket) => {
+    socket.on('pingHeartbeat', () => { socket.emit('pongHeartbeat'); });
+    
+    socket.on('joinRoom', ({ roomCode, userName, userId, isBot }) => {
+        try {
+            socket.join(roomCode);
+            if (!saboRooms[roomCode]) {
+                saboRooms[roomCode] = { roomCode, phase: 'LOBBY', players: [], spectators: [], timeouts: new Set() };
+            }
+            const room = saboRooms[roomCode];
+
+            const disconnectKey = `${roomCode}_${userId}`;
+            if (saboDisconnectTimers[disconnectKey]) {
+                clearTimeout(saboDisconnectTimers[disconnectKey]);
+                delete saboDisconnectTimers[disconnectKey];
+            }
+
+            let existingPlayer = room.players.find(p => (userId && p.userId === userId) || p.name === userName);
+            
+            if (!existingPlayer) {
+                const isSpectator = room.phase !== 'LOBBY';
+                room.players.push({
+                    id: socket.id, 
+                    name: userName, 
+                    userId, 
+                    isBot, 
+                    ready: room.players.length === 0, // 첫 접속자가 방장
+                    gold: 0, 
+                    tools: { pickaxe: true, lantern: true, cart: true }, 
+                    thief: false, 
+                    trapped: false,
+                    hand: [], 
+                    connected: true, 
+                    isSpectator
+                });
+            } else {
+                existingPlayer.id = socket.id;
+                existingPlayer.connected = true;
+            }
+            saboIo.to(roomCode).emit('roomUpdate', room);
+        } catch(e) { console.error('Sabo joinRoom error:', e); }
+    });
+
+    socket.on('playerReady', ({ roomCode, ready }) => {
+        try {
+            const room = saboRooms[roomCode];
+            if (room) {
+                const player = room.players.find(p => p.id === socket.id);
+                if (player) { 
+                    player.ready = ready; 
+                    saboIo.to(roomCode).emit('roomUpdate', room); 
+                }
+            }
+        } catch(e) { console.error('Sabo playerReady error:', e); }
+    });
+
+    socket.on('startGame', (roomCode) => {
+        try {
+            const room = saboRooms[roomCode];
+            if (!room || room.players.length === 0) return;
+            
+            room.phase = 'GAME';
+            room.round = 1;
+            room.maxRound = 3;
+            
+            // 덱(Deck) 생성
+            room.deck = createSaboDeck();
+            
+            // 플레이어 인원에 따라 초기 손패 개수 설정 (보통 3~5인: 6장, 6~7인: 5장, 8~10인: 4장)
+            const cardsPerPlayer = room.players.length <= 5 ? 6 : (room.players.length <= 7 ? 5 : 4);
+            
+            room.players.forEach(p => {
+                p.hand = [];
+                for(let i=0; i<cardsPerPlayer; i++) {
+                    if(room.deck.length > 0) p.hand.push(room.deck.pop());
+                }
+                p.gold = 0;
+                // 장비 기본 고장 없음
+                p.tools = { pickaxe: true, lantern: true, cart: true };
+                p.thief = false;
+                p.trapped = false;
+            });
+            
+            room.deckCount = room.deck.length;
+            
+            // 게임 시작 이벤트 프론트엔드로 전달
+            saboIo.to(roomCode).emit('gameStarted', room);
+        } catch(e) { console.error('Sabo startGame error:', e); }
+    });
+
+    socket.on('leaveRoom', (roomCode) => {
+        try {
+            const room = saboRooms[roomCode];
+            if (!room) return;
+
+            if (room.players.length > 0 && room.players[0].id === socket.id && room.players.some(p => p.isBot)) {
+                destroyRoom(saboRooms, saboDisconnectTimers, roomCode, saboIo, '방장이 퇴장하여 방이 폭파되었습니다.');
+                return;
+            }
+
+            room.players = room.players.filter(p => p.id !== socket.id);
+            socket.leave(roomCode);
+            
+            if (room.players.length === 0) {
+                destroyRoom(saboRooms, saboDisconnectTimers, roomCode, saboIo);
+            } else {
+                saboIo.to(roomCode).emit('roomUpdate', room);
+            }
+        } catch(e){ console.error('Sabo leaveRoom error:', e); }
+    });
+
+    socket.on('disconnect', () => {
+        try {
+            for (let roomCode in saboRooms) {
+                const room = saboRooms[roomCode];
+                const playerIndex = room.players.findIndex(p => p.id === socket.id);
+                
+                if (playerIndex !== -1) {
+                    const player = room.players[playerIndex];
+
+                    if (playerIndex === 0 && room.players.some(p => p.isBot)) {
+                        destroyRoom(saboRooms, saboDisconnectTimers, roomCode, saboIo, '방장의 연결이 끊겨 방이 폭파되었습니다.');
+                        continue;
+                    }
+
+                    player.connected = false;
+                    const disconnectKey = `${roomCode}_${player.userId}`;
+                    
+                    if (saboDisconnectTimers[disconnectKey]) clearTimeout(saboDisconnectTimers[disconnectKey]);
+                    
+                    if (room.phase === 'LOBBY') {
+                        room.players.splice(playerIndex, 1);
+                        if (room.players.length === 0) {
+                            destroyRoom(saboRooms, saboDisconnectTimers, roomCode, saboIo);
+                        } else {
+                            saboIo.to(roomCode).emit('roomUpdate', room);
+                        }
+                    } else {
+                        // 게임 중 접속 끊김 처리
+                        saboIo.to(roomCode).emit('roomUpdate', room);
+                        
+                        saboDisconnectTimers[disconnectKey] = setTimeout(() => {
+                            delete saboDisconnectTimers[disconnectKey];
+                            const currentRoom = saboRooms[roomCode];
+                            if (!currentRoom) return;
+                            
+                            currentRoom.players = currentRoom.players.filter(p => p.userId !== player.userId);
+                            if (currentRoom.players.length === 0) {
+                                destroyRoom(saboRooms, saboDisconnectTimers, roomCode, saboIo);
+                            } else {
+                                saboIo.to(roomCode).emit('roomUpdate', currentRoom);
+                            }
+                        }, 60000); // 60초 후 완전히 쫓아냄
+                    }
+                }
+            }
+        } catch(e) { console.error('Sabo disconnect error:', e); }
+    });
+});
+
 const PORT = process.env.PORT || 10000;
 server.listen(PORT, () => { 
-    console.log(`🚀 포커, 플립7 & COUP 서버 구동 완료. 포트 ${PORT}`); 
+    console.log(`🚀 포커, 플립7, COUP, 사보타지 서버 구동 완료. 포트 ${PORT}`); 
 });
