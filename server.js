@@ -1281,7 +1281,14 @@ const SABO_ACTION_CARD_IMAGES = {
     '낙석': 'https://masi4882.dothome.co.kr/sabo/58.jpg',
     '파괴_곡괭이': 'https://masi4882.dothome.co.kr/sabo/59.jpg',
     '파괴_랜턴': 'https://masi4882.dothome.co.kr/sabo/60.jpg',
-    '파괴_수레': 'https://masi4882.dothome.co.kr/sabo/61.jpg'
+    '파괴_수레': 'https://masi4882.dothome.co.kr/sabo/61.jpg',
+    '카드바꾸기': 'https://masi4882.dothome.co.kr/sabo/62.jpg',
+    '직업바꾸기': 'https://masi4882.dothome.co.kr/sabo/63.jpg',
+    '염탐': 'https://masi4882.dothome.co.kr/sabo/64.jpg',
+    '도둑': 'https://masi4882.dothome.co.kr/sabo/65.jpg',
+    '도둑방지': 'https://masi4882.dothome.co.kr/sabo/66.jpg',
+    '감옥': 'https://masi4882.dothome.co.kr/sabo/67.jpg',
+    '감옥탈출': 'https://masi4882.dothome.co.kr/sabo/68.jpg'
 };
 
 // ★ 딜럭스 룰: 덱 122장(굴 74 + 행동 48) 생성
@@ -1289,12 +1296,10 @@ function createSaboDeck() {
     const deck = [];
     let idCounter = 1;
 
-    // 1. 굴 카드 (74장) - 기본판 44 + 확장 30
     for (let i = 0; i < 74; i++) {
         deck.push({ id: `c${idCounter++}`, type: 'path', desc: '굴 카드', isPlayable: true });
     }
 
-    // 2. 행동 카드 생성 함수
     const addAction = (desc, imgKey, count) => {
         for (let i = 0; i < count; i++) {
             deck.push({ 
@@ -1320,17 +1325,17 @@ function createSaboDeck() {
     addAction('도착점 확인', '도착점확인', 6);
     addAction('낙석', '낙석', 3);
 
-    // [사보타지 2 확장 행동 카드 21장] (텍스트로 렌더링되게 구성)
-    addAction('도둑', null, 4);
-    addAction('도둑 잡기', null, 3);
-    addAction('감옥', null, 3);
-    addAction('감옥 해방', null, 4);
-    addAction('모자 교환', null, 2);
-    addAction('카드 교체', null, 2);
-    addAction('정보 확인', null, 2);
+    // [사보타지 2 확장 행동 카드 21장] 
+    addAction('도둑', '도둑', 4);
+    addAction('도둑 방지', '도둑방지', 3);
+    addAction('감옥', '감옥', 3);
+    addAction('감옥 탈출', '감옥탈출', 4);
+    addAction('직업 바꾸기', '직업바꾸기', 2);
+    addAction('카드 바꾸기', '카드바꾸기', 2);
+    addAction('염탐', '염탐', 2);
     addAction('버리기', null, 1);
 
-    return deck.sort(() => Math.random() - 0.5); // 무작위 셔플
+    return deck.sort(() => Math.random() - 0.5); 
 }
 
 saboIo.on('connection', (socket) => {
@@ -1340,7 +1345,10 @@ saboIo.on('connection', (socket) => {
         try {
             socket.join(roomCode);
             if (!saboRooms[roomCode]) {
-                saboRooms[roomCode] = { roomCode, phase: 'LOBBY', players: [], spectators: [], timeouts: new Set() };
+                saboRooms[roomCode] = { 
+                    roomCode, phase: 'LOBBY', players: [], spectators: [], timeouts: new Set(),
+                    turnIndex: 0 
+                };
             }
             const room = saboRooms[roomCode];
 
@@ -1398,11 +1406,9 @@ saboIo.on('connection', (socket) => {
             room.round = 1;
             room.maxRound = 3;
             
-            // ★ 딜럭스 룰 적용
-            room.deck = createSaboDeck(); // 122장
-            room.deck.splice(0, 10); // 10장 무조건 태우기 (게임 제외)
+            room.deck = createSaboDeck(); 
+            room.deck.splice(0, 10); 
             
-            // 직업 카드 15장 세팅
             let roleDeck = [
                 '파란광부', '파란광부', '파란광부', '파란광부',
                 '초록광부', '초록광부', '초록광부', '초록광부',
@@ -1410,17 +1416,14 @@ saboIo.on('connection', (socket) => {
                 '방해꾼', '방해꾼', '방해꾼'
             ].sort(() => Math.random() - 0.5);
 
-            // ★ 인원 무관 6장 배분 (딜럭스 룰)
             const cardsPerPlayer = 6;
             
             room.players.forEach(p => {
-                p.role = roleDeck.pop(); // 무작위로 1명당 1장씩 직업 할당
-                
+                p.role = roleDeck.pop();
                 p.hand = [];
                 for(let i=0; i<cardsPerPlayer; i++) {
                     if(room.deck.length > 0) p.hand.push(room.deck.pop());
                 }
-                
                 p.gold = 0;
                 p.tools = { pickaxe: true, lantern: true, cart: true };
                 p.thief = false;
@@ -1429,8 +1432,78 @@ saboIo.on('connection', (socket) => {
             
             room.deckCount = room.deck.length;
             
+            // 선 플레이어 무작위 선정
+            room.turnIndex = Math.floor(Math.random() * room.players.length);
+            room.turnId = room.players[room.turnIndex].id;
+            
             saboIo.to(roomCode).emit('gameStarted', room);
         } catch(e) { console.error('Sabo startGame error:', e); }
+    });
+
+    // 특수 카드 처리 이벤트 통합
+    socket.on('playCard', ({ roomCode, card, targetId, slot }) => {
+        try {
+            const room = saboRooms[roomCode];
+            if (!room || room.phase !== 'GAME') return;
+
+            const player = room.players.find(p => p.id === socket.id);
+            const target = targetId ? room.players.find(p => p.id === targetId || p.userId === targetId) : null;
+
+            if (!player) return;
+            const d = (card.desc || '').replace(/\s+/g, '');
+
+            if (d.includes('염탐') || d.includes('정보확인')) {
+                if (target) {
+                    socket.emit('spyResult', { targetName: target.name, role: target.role });
+                }
+            } 
+            else if (d.includes('직업바꾸기') || d.includes('직업교체') || d.includes('모자교환')) {
+                if (target) {
+                    const ROLES = ['파란광부', '초록광부', '대장', '부당이익자', '지질학자', '방해꾼'];
+                    target.role = ROLES[Math.floor(Math.random() * ROLES.length)];
+                }
+            }
+            else if (d.includes('카드바꾸기') || d.includes('카드교체')) {
+                if (target && target.id !== player.id) {
+                    const myHand = [...player.hand];
+                    const targetHand = [...target.hand];
+                    
+                    const myRemainingHand = myHand.filter(c => c.id !== card.id);
+                    
+                    player.hand = targetHand;
+                    target.hand = myRemainingHand;
+
+                    if (room.deck.length > 0) {
+                        target.hand.push(room.deck.pop());
+                    }
+                }
+            }
+            else if (d.includes('도둑방지') || d.includes('도둑막기') || d.includes('도둑잡기')) {
+                if (target) target.thief = false;
+            }
+            else if (d.includes('도둑')) {
+                player.thief = true;
+            }
+            else if (d.includes('감옥탈출') || d.includes('탈옥') || d.includes('감옥해방')) {
+                if (target) target.trapped = false;
+            }
+            else if (d.includes('감옥')) {
+                if (target) target.trapped = true;
+            }
+
+            if (!d.includes('카드바꾸기') && !d.includes('카드교체')) {
+                player.hand = player.hand.filter(c => c.id !== card.id);
+                if(room.deck.length > 0) {
+                    player.hand.push(room.deck.pop());
+                }
+            }
+
+            room.turnIndex = (room.turnIndex + 1) % room.players.length;
+            room.turnId = room.players[room.turnIndex].id;
+            room.deckCount = room.deck.length;
+
+            saboIo.to(roomCode).emit('roomUpdate', room);
+        } catch(e) { console.error('Sabo playCard error:', e); }
     });
 
     socket.on('leaveRoom', (roomCode) => {
