@@ -1282,7 +1282,6 @@ const SABO_ACTION_CARD_IMAGES = {
     '파괴_곡괭이': 'https://masi4882.dothome.co.kr/sabo/59.jpg',
     '파괴_랜턴': 'https://masi4882.dothome.co.kr/sabo/60.jpg',
     '파괴_수레': 'https://masi4882.dothome.co.kr/sabo/61.jpg',
-    '카드바꾸기': 'https://masi4882.dothome.co.kr/sabo/62.jpg',
     '직업바꾸기': 'https://masi4882.dothome.co.kr/sabo/63.jpg',
     '염탐': 'https://masi4882.dothome.co.kr/sabo/64.jpg',
     '도둑': 'https://masi4882.dothome.co.kr/sabo/65.jpg',
@@ -1357,7 +1356,6 @@ function createSaboDeck() {
     addAction('감옥', '감옥', 3);
     addAction('감옥 탈출', '감옥탈출', 4);
     addAction('직업 바꾸기', '직업바꾸기', 2);
-    // 카드 바꾸기는 제거됨
     addAction('염탐', '염탐', 2);
 
     return deck.sort(() => Math.random() - 0.5); 
@@ -1465,7 +1463,7 @@ saboIo.on('connection', (socket) => {
         } catch(e) { console.error('Sabo startGame error:', e); }
     });
 
-    socket.on('playCard', ({ roomCode, card, cards, targetId, slot, isRotated, isDiscard }) => {
+    socket.on('playCard', ({ roomCode, card, cards, targetId, slot, isRotated, isDiscard, equipType }) => {
         try {
             const room = saboRooms[roomCode];
             if (!room || room.phase !== 'GAME') return;
@@ -1473,10 +1471,8 @@ saboIo.on('connection', (socket) => {
             const player = room.players.find(p => p.id === socket.id);
             if (!player || room.turnId !== socket.id) return; 
 
-            // ★ 버리기 로직 강화: 빈 배열이 와도 강제로 턴이 넘어가도록 수정 (먹통 방지)
             if (isDiscard) {
                 const discardCards = cards || (card ? [card] : []);
-                
                 if (discardCards.length > 0) {
                     const discardIds = discardCards.map(c => c.id);
                     player.hand = player.hand.filter(c => !discardIds.includes(c.id));
@@ -1485,7 +1481,6 @@ saboIo.on('connection', (socket) => {
                         if (room.deck.length > 0) player.hand.push(room.deck.pop());
                     }
                 }
-                
                 room.turnIndex = (room.turnIndex + 1) % room.players.length;
                 room.turnId = room.players[room.turnIndex].id;
                 room.deckCount = room.deck.length;
@@ -1497,35 +1492,48 @@ saboIo.on('connection', (socket) => {
             const target = targetId ? room.players.find(p => p.id === targetId || p.userId === targetId) : null;
             const d = (card.desc || '').replace(/\s+/g, '');
 
-            if (d.includes('염탐') || d.includes('정보확인')) {
-                if (target) socket.emit('spyResult', { targetName: target.name, role: target.role });
-            } 
-            else if (d.includes('직업바꾸기') || d.includes('직업교체') || d.includes('모자교환')) {
-                if (target) {
+            if (target) {
+                if (d.includes('파괴') || d.includes('수리')) {
+                    if (d.includes('파괴')) {
+                        if (equipType) target.tools[equipType] = false;
+                        else {
+                            if (d.includes('곡괭이')) target.tools.pickaxe = false;
+                            if (d.includes('랜턴')) target.tools.lantern = false;
+                            if (d.includes('수레')) target.tools.cart = false;
+                        }
+                    } else if (d.includes('수리')) {
+                        if (equipType) target.tools[equipType] = true;
+                        else {
+                            if (d.includes('곡괭이')) target.tools.pickaxe = true;
+                            if (d.includes('랜턴')) target.tools.lantern = true;
+                            if (d.includes('수레')) target.tools.cart = true;
+                        }
+                    }
+                }
+                else if (d.includes('염탐') || d.includes('정보확인')) {
+                    socket.emit('spyResult', { targetName: target.name, role: target.role });
+                } 
+                else if (d.includes('직업바꾸기') || d.includes('직업교체') || d.includes('모자교환')) {
                     const ROLES = ['파란광부', '초록광부', '대장', '부당이익자', '지질학자', '방해꾼'];
                     target.role = ROLES[Math.floor(Math.random() * ROLES.length)];
                 }
-            }
-            else if (d.includes('도둑방지') || d.includes('도둑막기') || d.includes('도둑잡기')) {
-                if (target) target.thief = false;
-            }
-            else if (d.includes('도둑')) {
-                player.thief = true;
-            }
-            else if (d.includes('감옥탈출') || d.includes('탈옥') || d.includes('감옥해방')) {
-                if (target) target.trapped = false;
-            }
-            else if (d.includes('감옥')) {
-                if (target) target.trapped = true;
-            }
-
-            if (d.includes('낙석') || d.includes('붕괴') || d.includes('길파괴')) {
-                if (slot) {
+                else if (d.includes('도둑방지') || d.includes('도둑막기') || d.includes('도둑잡기')) {
+                    target.thief = false;
+                }
+                else if (d.includes('도둑')) {
+                    player.thief = true;
+                }
+                else if (d.includes('감옥탈출') || d.includes('탈옥') || d.includes('감옥해방')) {
+                    target.trapped = false;
+                }
+                else if (d.includes('감옥')) {
+                    target.trapped = true;
+                }
+            } else if (slot) {
+                if (d.includes('낙석') || d.includes('붕괴') || d.includes('길파괴')) {
                     const bIdx = room.board.findIndex(c => c.col === slot.col && c.row === slot.row);
                     if (bIdx !== -1) room.board.splice(bIdx, 1);
-                }
-            } else if (card.type === 'path') {
-                if (slot) {
+                } else if (card.type === 'path') {
                     if (!room.board) room.board = [];
                     room.board.push({
                         id: card.id,
@@ -1552,7 +1560,6 @@ saboIo.on('connection', (socket) => {
         } catch(e) { console.error('Sabo playCard error:', e); }
     });
 
-    // ★ 나갔을 때 턴 정지 방어 로직 추가
     socket.on('leaveRoom', (roomCode) => {
         try {
             const room = saboRooms[roomCode];
