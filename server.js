@@ -1481,80 +1481,95 @@ saboIo.on('connection', (socket) => {
                         if (room.deck.length > 0) player.hand.push(room.deck.pop());
                     }
                 }
-                room.turnIndex = (room.turnIndex + 1) % room.players.length;
-                room.turnId = room.players[room.turnIndex].id;
-                room.deckCount = room.deck.length;
-                saboIo.to(roomCode).emit('roomUpdate', room);
-                return;
-            }
+            } else {
+                if (!card) return;
+                const target = targetId ? room.players.find(p => p.id === targetId || p.userId === targetId) : null;
+                const d = (card.desc || '').replace(/\s+/g, '');
 
-            if (!card) return;
-            const target = targetId ? room.players.find(p => p.id === targetId || p.userId === targetId) : null;
-            const d = (card.desc || '').replace(/\s+/g, '');
-
-            if (target) {
-                if (d.includes('파괴') || d.includes('수리')) {
-                    if (d.includes('파괴')) {
-                        if (equipType) target.tools[equipType] = false;
-                        else {
-                            if (d.includes('곡괭이')) target.tools.pickaxe = false;
-                            if (d.includes('랜턴')) target.tools.lantern = false;
-                            if (d.includes('수레')) target.tools.cart = false;
-                        }
-                    } else if (d.includes('수리')) {
-                        if (equipType) target.tools[equipType] = true;
-                        else {
-                            if (d.includes('곡괭이')) target.tools.pickaxe = true;
-                            if (d.includes('랜턴')) target.tools.lantern = true;
-                            if (d.includes('수레')) target.tools.cart = true;
+                if (target) {
+                    if (d.includes('파괴') || d.includes('수리')) {
+                        if (d.includes('파괴')) {
+                            if (equipType) target.tools[equipType] = false;
+                            else {
+                                if (d.includes('곡괭이')) target.tools.pickaxe = false;
+                                if (d.includes('랜턴')) target.tools.lantern = false;
+                                if (d.includes('수레')) target.tools.cart = false;
+                            }
+                        } else if (d.includes('수리')) {
+                            if (equipType) target.tools[equipType] = true;
+                            else {
+                                if (d.includes('곡괭이')) target.tools.pickaxe = true;
+                                if (d.includes('랜턴')) target.tools.lantern = true;
+                                if (d.includes('수레')) target.tools.cart = true;
+                            }
                         }
                     }
+                    else if (d.includes('염탐') || d.includes('정보확인')) {
+                        socket.emit('spyResult', { targetName: target.name, role: target.role });
+                    } 
+                    else if (d.includes('직업바꾸기') || d.includes('직업교체') || d.includes('모자교환')) {
+                        const ROLES = ['파란광부', '초록광부', '대장', '부당이익자', '지질학자', '방해꾼'];
+                        target.role = ROLES[Math.floor(Math.random() * ROLES.length)];
+                    }
+                    else if (d.includes('도둑방지') || d.includes('도둑막기') || d.includes('도둑잡기')) {
+                        target.thief = false;
+                    }
+                    else if (d.includes('도둑')) {
+                        player.thief = true;
+                    }
+                    else if (d.includes('감옥탈출') || d.includes('탈옥') || d.includes('감옥해방')) {
+                        target.trapped = false;
+                    }
+                    else if (d.includes('감옥')) {
+                        target.trapped = true;
+                    }
+                } else if (slot) {
+                    if (d.includes('낙석') || d.includes('붕괴') || d.includes('길파괴')) {
+                        const bIdx = room.board.findIndex(c => c.col === slot.col && c.row === slot.row);
+                        if (bIdx !== -1) room.board.splice(bIdx, 1);
+                    } else if (card.type === 'path') {
+                        if (!room.board) room.board = [];
+                        room.board.push({
+                            id: card.id,
+                            type: card.type,
+                            desc: card.desc,
+                            imgCode: card.imgCode,
+                            col: slot.col,
+                            row: slot.row,
+                            isRotated: isRotated || false 
+                        });
+                    }
                 }
-                else if (d.includes('염탐') || d.includes('정보확인')) {
-                    socket.emit('spyResult', { targetName: target.name, role: target.role });
-                } 
-                else if (d.includes('직업바꾸기') || d.includes('직업교체') || d.includes('모자교환')) {
-                    const ROLES = ['파란광부', '초록광부', '대장', '부당이익자', '지질학자', '방해꾼'];
-                    target.role = ROLES[Math.floor(Math.random() * ROLES.length)];
-                }
-                else if (d.includes('도둑방지') || d.includes('도둑막기') || d.includes('도둑잡기')) {
-                    target.thief = false;
-                }
-                else if (d.includes('도둑')) {
-                    player.thief = true;
-                }
-                else if (d.includes('감옥탈출') || d.includes('탈옥') || d.includes('감옥해방')) {
-                    target.trapped = false;
-                }
-                else if (d.includes('감옥')) {
-                    target.trapped = true;
-                }
-            } else if (slot) {
-                if (d.includes('낙석') || d.includes('붕괴') || d.includes('길파괴')) {
-                    const bIdx = room.board.findIndex(c => c.col === slot.col && c.row === slot.row);
-                    if (bIdx !== -1) room.board.splice(bIdx, 1);
-                } else if (card.type === 'path') {
-                    if (!room.board) room.board = [];
-                    room.board.push({
-                        id: card.id,
-                        type: card.type,
-                        desc: card.desc,
-                        imgCode: card.imgCode,
-                        col: slot.col,
-                        row: slot.row,
-                        isRotated: isRotated || false 
-                    });
+
+                player.hand = player.hand.filter(c => c.id !== card.id);
+                if(room.deck.length > 0) {
+                    player.hand.push(room.deck.pop());
                 }
             }
 
-            player.hand = player.hand.filter(c => c.id !== card.id);
-            if(room.deck.length > 0) {
-                player.hand.push(room.deck.pop());
-            }
-
-            room.turnIndex = (room.turnIndex + 1) % room.players.length;
-            room.turnId = room.players[room.turnIndex].id;
             room.deckCount = room.deck.length;
+
+            let isGameOver = true;
+            for (let p of room.players) {
+                if (p.hand && p.hand.length > 0) {
+                    isGameOver = false;
+                    break;
+                }
+            }
+
+            if (isGameOver && room.deckCount === 0) {
+                room.phase = 'GAME_OVER';
+            } else {
+                let loopCount = 0;
+                do {
+                    room.turnIndex = (room.turnIndex + 1) % room.players.length;
+                    room.turnId = room.players[room.turnIndex].id;
+                    loopCount++;
+                } while (
+                    (!room.players[room.turnIndex].hand || room.players[room.turnIndex].hand.length === 0) && 
+                    loopCount < room.players.length
+                );
+            }
 
             saboIo.to(roomCode).emit('roomUpdate', room);
         } catch(e) { console.error('Sabo playCard error:', e); }
