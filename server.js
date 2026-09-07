@@ -1357,7 +1357,7 @@ function createSaboDeck() {
     addAction('감옥', '감옥', 3);
     addAction('감옥 탈출', '감옥탈출', 4);
     addAction('직업 바꾸기', '직업바꾸기', 2);
-    addAction('카드 바꾸기', '카드바꾸기', 2); // ★ 카드 바꾸기 복원 완료
+    // 카드 바꾸기는 제거됨
     addAction('염탐', '염탐', 2);
 
     return deck.sort(() => Math.random() - 0.5); 
@@ -1473,15 +1473,17 @@ saboIo.on('connection', (socket) => {
             const player = room.players.find(p => p.id === socket.id);
             if (!player || room.turnId !== socket.id) return; 
 
+            // ★ 버리기 로직 강화: 빈 배열이 와도 강제로 턴이 넘어가도록 수정 (먹통 방지)
             if (isDiscard) {
                 const discardCards = cards || (card ? [card] : []);
-                if (discardCards.length === 0) return;
                 
-                const discardIds = discardCards.map(c => c.id);
-                player.hand = player.hand.filter(c => !discardIds.includes(c.id));
-                
-                for (let i = 0; i < discardIds.length; i++) {
-                    if (room.deck.length > 0) player.hand.push(room.deck.pop());
+                if (discardCards.length > 0) {
+                    const discardIds = discardCards.map(c => c.id);
+                    player.hand = player.hand.filter(c => !discardIds.includes(c.id));
+                    
+                    for (let i = 0; i < discardIds.length; i++) {
+                        if (room.deck.length > 0) player.hand.push(room.deck.pop());
+                    }
                 }
                 
                 room.turnIndex = (room.turnIndex + 1) % room.players.length;
@@ -1504,16 +1506,6 @@ saboIo.on('connection', (socket) => {
                     target.role = ROLES[Math.floor(Math.random() * ROLES.length)];
                 }
             }
-            else if (d.includes('카드바꾸기') || d.includes('카드교체')) {
-                if (target && target.id !== player.id) {
-                    const myHand = [...player.hand];
-                    const targetHand = [...target.hand];
-                    const myRemainingHand = myHand.filter(c => c.id !== card.id);
-                    player.hand = targetHand;
-                    target.hand = myRemainingHand;
-                    if (room.deck.length > 0) target.hand.push(room.deck.pop());
-                }
-            }
             else if (d.includes('도둑방지') || d.includes('도둑막기') || d.includes('도둑잡기')) {
                 if (target) target.thief = false;
             }
@@ -1527,7 +1519,6 @@ saboIo.on('connection', (socket) => {
                 if (target) target.trapped = true;
             }
 
-            // 낙석(길파괴) 로직: 지정한 보드 슬롯의 카드 삭제
             if (d.includes('낙석') || d.includes('붕괴') || d.includes('길파괴')) {
                 if (slot) {
                     const bIdx = room.board.findIndex(c => c.col === slot.col && c.row === slot.row);
@@ -1548,11 +1539,9 @@ saboIo.on('connection', (socket) => {
                 }
             }
 
-            if (!d.includes('카드바꾸기') && !d.includes('카드교체')) {
-                player.hand = player.hand.filter(c => c.id !== card.id);
-                if(room.deck.length > 0) {
-                    player.hand.push(room.deck.pop());
-                }
+            player.hand = player.hand.filter(c => c.id !== card.id);
+            if(room.deck.length > 0) {
+                player.hand.push(room.deck.pop());
             }
 
             room.turnIndex = (room.turnIndex + 1) % room.players.length;
@@ -1563,6 +1552,7 @@ saboIo.on('connection', (socket) => {
         } catch(e) { console.error('Sabo playCard error:', e); }
     });
 
+    // ★ 나갔을 때 턴 정지 방어 로직 추가
     socket.on('leaveRoom', (roomCode) => {
         try {
             const room = saboRooms[roomCode];
@@ -1573,12 +1563,27 @@ saboIo.on('connection', (socket) => {
                 return;
             }
 
+            const wasTheirTurn = room.turnId === socket.id;
             room.players = room.players.filter(p => p.id !== socket.id);
             socket.leave(roomCode);
             
             if (room.players.length === 0) {
                 destroyRoom(saboRooms, saboDisconnectTimers, roomCode, saboIo);
             } else {
+                if (room.phase === 'GAME') {
+                    if (wasTheirTurn) {
+                        room.turnIndex = room.turnIndex % room.players.length;
+                        room.turnId = room.players[room.turnIndex].id;
+                    } else {
+                        const currentTurnPlayer = room.players.find(p => p.id === room.turnId);
+                        if (currentTurnPlayer) {
+                            room.turnIndex = room.players.findIndex(p => p.id === room.turnId);
+                        } else {
+                            room.turnIndex = 0;
+                            room.turnId = room.players[0].id;
+                        }
+                    }
+                }
                 saboIo.to(roomCode).emit('roomUpdate', room);
             }
         } catch(e){ console.error('Sabo leaveRoom error:', e); }
@@ -1618,10 +1623,26 @@ saboIo.on('connection', (socket) => {
                             const currentRoom = saboRooms[roomCode];
                             if (!currentRoom) return;
                             
+                            const wasTheirTurn = currentRoom.turnId === player.id;
                             currentRoom.players = currentRoom.players.filter(p => p.userId !== player.userId);
+                            
                             if (currentRoom.players.length === 0) {
                                 destroyRoom(saboRooms, saboDisconnectTimers, roomCode, saboIo);
                             } else {
+                                if (currentRoom.phase === 'GAME') {
+                                    if (wasTheirTurn) {
+                                        currentRoom.turnIndex = currentRoom.turnIndex % currentRoom.players.length;
+                                        currentRoom.turnId = currentRoom.players[currentRoom.turnIndex].id;
+                                    } else {
+                                        const currentTurnPlayer = currentRoom.players.find(p => p.id === currentRoom.turnId);
+                                        if (currentTurnPlayer) {
+                                            currentRoom.turnIndex = currentRoom.players.findIndex(p => p.id === currentRoom.turnId);
+                                        } else {
+                                            currentRoom.turnIndex = 0;
+                                            currentRoom.turnId = currentRoom.players[0].id;
+                                        }
+                                    }
+                                }
                                 saboIo.to(roomCode).emit('roomUpdate', currentRoom);
                             }
                         }, 60000); 
