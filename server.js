@@ -1291,25 +1291,23 @@ const SABO_ACTION_CARD_IMAGES = {
     '감옥탈출': 'https://masi4882.dothome.co.kr/sabo/68.jpg'
 };
 
-// ★ 딜럭스 룰: 덱 122장(굴 74 + 행동 48) 생성 (길카드 imgCode 반영 완료)
+// ★ 딜럭스 룰: 덱 생성 (버리기 카드 제거됨)
 function createSaboDeck() {
     const deck = [];
     let idCounter = 1;
 
-    // 길 카드 추가 도우미 함수 (프론트에 전달할 imgCode 포함)
     const addPathCards = (imgCode, count, type, desc) => {
         for (let i = 0; i < count; i++) {
             deck.push({ 
                 id: `c${idCounter++}`, 
                 type: type, 
                 desc: desc, 
-                imgCode: imgCode, // ★ 프론트엔드가 이미지를 불러오는 핵심 키워드
+                imgCode: imgCode, 
                 isPlayable: true 
             });
         }
     };
 
-    // ---------------- [일반 길 카드] ----------------
     addPathCards('03', 4, 'path', '일반 길');
     addPathCards('04', 3, 'path', '일반 길');
     addPathCards('05', 5, 'path', '일반 길');
@@ -1321,22 +1319,17 @@ function createSaboDeck() {
     const singlePathCodes = ['10','11','12','13','14','15','16','17','18','21','22','23','24','25','26','27','28'];
     singlePathCodes.forEach(code => addPathCards(code, 1, 'path', '일반 길'));
 
-    // ---------------- [터널 길 카드] ----------------
     addPathCards('29', 2, 'path', '터널 길 (연결됨)');
 
-    // ---------------- [수정 길 카드] ----------------
     const singleCrystalCodes = ['31','32','33','34','36','37','38'];
     singleCrystalCodes.forEach(code => addPathCards(code, 1, 'path', '수정 길'));
     addPathCards('35', 3, 'path', '수정 길');
 
-    // ---------------- [색깔문 길 카드] ----------------
     ['41','42','43'].forEach(code => addPathCards(code, 1, 'path', '초록문 길'));
     ['44','45','46'].forEach(code => addPathCards(code, 1, 'path', '파란문 길'));
 
-    // ---------------- [사다리 길 카드 (시작점 효과)] ----------------
     ['47','48','49','50'].forEach(code => addPathCards(code, 1, 'path', '사다리 길 (시작점)'));
 
-    // ---------------- [행동 카드 48장 추가] ----------------
     const addAction = (desc, imgKey, count) => {
         for (let i = 0; i < count; i++) {
             deck.push({ 
@@ -1349,7 +1342,6 @@ function createSaboDeck() {
         }
     };
 
-    // [기본판 행동 카드 27장]
     addAction('곡괭이 파괴', '파괴_곡괭이', 3);
     addAction('랜턴 파괴', '파괴_랜턴', 3);
     addAction('수레 파괴', '파괴_수레', 3);
@@ -1361,8 +1353,6 @@ function createSaboDeck() {
     addAction('랜턴/수레 수리', '수리_랜턴_수레', 1);
     addAction('도착점 확인', '도착점확인', 6);
     addAction('낙석', '낙석', 3);
-
-    // [사보타지 2 확장 행동 카드 21장] 
     addAction('도둑', '도둑', 4);
     addAction('도둑 방지', '도둑방지', 3);
     addAction('감옥', '감옥', 3);
@@ -1370,7 +1360,7 @@ function createSaboDeck() {
     addAction('직업 바꾸기', '직업바꾸기', 2);
     addAction('카드 바꾸기', '카드바꾸기', 2);
     addAction('염탐', '염탐', 2);
-    addAction('버리기', null, 1);
+    // '버리기' 카드는 삭제됨
 
     return deck.sort(() => Math.random() - 0.5); 
 }
@@ -1384,7 +1374,7 @@ saboIo.on('connection', (socket) => {
             if (!saboRooms[roomCode]) {
                 saboRooms[roomCode] = { 
                     roomCode, phase: 'LOBBY', players: [], spectators: [], timeouts: new Set(),
-                    turnIndex: 0 
+                    turnIndex: 0, board: [] // 보드 초기화 추가
                 };
             }
             const room = saboRooms[roomCode];
@@ -1442,6 +1432,7 @@ saboIo.on('connection', (socket) => {
             room.phase = 'GAME';
             room.round = 1;
             room.maxRound = 3;
+            room.board = []; // 보드 초기화
             
             room.deck = createSaboDeck(); 
             room.deck.splice(0, 10); 
@@ -1469,7 +1460,6 @@ saboIo.on('connection', (socket) => {
             
             room.deckCount = room.deck.length;
             
-            // 선 플레이어 무작위 선정
             room.turnIndex = Math.floor(Math.random() * room.players.length);
             room.turnId = room.players[room.turnIndex].id;
             
@@ -1477,8 +1467,8 @@ saboIo.on('connection', (socket) => {
         } catch(e) { console.error('Sabo startGame error:', e); }
     });
 
-    // 특수 카드 처리 이벤트 통합
-    socket.on('playCard', ({ roomCode, card, targetId, slot }) => {
+    // ★ 보드 배치 기능 추가 및 isRotated 저장
+    socket.on('playCard', ({ roomCode, card, targetId, slot, isRotated }) => {
         try {
             const room = saboRooms[roomCode];
             if (!room || room.phase !== 'GAME') return;
@@ -1490,9 +1480,7 @@ saboIo.on('connection', (socket) => {
             const d = (card.desc || '').replace(/\s+/g, '');
 
             if (d.includes('염탐') || d.includes('정보확인')) {
-                if (target) {
-                    socket.emit('spyResult', { targetName: target.name, role: target.role });
-                }
+                if (target) socket.emit('spyResult', { targetName: target.name, role: target.role });
             } 
             else if (d.includes('직업바꾸기') || d.includes('직업교체') || d.includes('모자교환')) {
                 if (target) {
@@ -1504,15 +1492,10 @@ saboIo.on('connection', (socket) => {
                 if (target && target.id !== player.id) {
                     const myHand = [...player.hand];
                     const targetHand = [...target.hand];
-                    
                     const myRemainingHand = myHand.filter(c => c.id !== card.id);
-                    
                     player.hand = targetHand;
                     target.hand = myRemainingHand;
-
-                    if (room.deck.length > 0) {
-                        target.hand.push(room.deck.pop());
-                    }
+                    if (room.deck.length > 0) target.hand.push(room.deck.pop());
                 }
             }
             else if (d.includes('도둑방지') || d.includes('도둑막기') || d.includes('도둑잡기')) {
@@ -1526,6 +1509,20 @@ saboIo.on('connection', (socket) => {
             }
             else if (d.includes('감옥')) {
                 if (target) target.trapped = true;
+            }
+
+            // ★ 슬롯이 지정되어 전송되었다면 보드에 카드 배치
+            if (slot) {
+                if (!room.board) room.board = [];
+                room.board.push({
+                    id: card.id,
+                    type: card.type,
+                    desc: card.desc,
+                    imgCode: card.imgCode,
+                    col: slot.col,
+                    row: slot.row,
+                    isRotated: isRotated || false // 회전 상태 서버에 저장
+                });
             }
 
             if (!d.includes('카드바꾸기') && !d.includes('카드교체')) {
