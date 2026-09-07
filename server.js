@@ -1270,6 +1270,14 @@ const saboIo = io.of('/sabo');
 const saboRooms = {};
 const saboDisconnectTimers = {};
 
+function emitSaboUpdate(roomCode, room) {
+    const safeRoom = { 
+        ...room, 
+        timer: room.timer ? { endTime: room.timer.endTime, duration: room.timer.duration } : null 
+    };
+    saboIo.to(roomCode).emit('roomUpdate', safeRoom);
+}
+
 function clearSaboTimer(room) {
     if (room.timer && room.timer.timeoutId) { 
         clearTimeout(room.timer.timeoutId); 
@@ -1292,8 +1300,7 @@ function startSaboTimer(room, roomCode, durationSec) {
             }
         }, durationMs)
     };
-    // 갱신된 타이머 상태 클라이언트로 전송
-    saboIo.to(roomCode).emit('roomUpdate', room);
+    emitSaboUpdate(roomCode, room);
 }
 
 function autoPlaySaboTurn(room, roomCode) {
@@ -1332,7 +1339,7 @@ function autoPlaySaboTurn(room, roomCode) {
         );
         startSaboTimer(room, roomCode, 60);
     }
-    saboIo.to(roomCode).emit('roomUpdate', room);
+    emitSaboUpdate(roomCode, room);
 }
 
 const SABO_ACTION_CARD_IMAGES = {
@@ -1468,7 +1475,7 @@ saboIo.on('connection', (socket) => {
                 existingPlayer.id = socket.id;
                 existingPlayer.connected = true;
             }
-            saboIo.to(roomCode).emit('roomUpdate', room);
+            emitSaboUpdate(roomCode, room);
         } catch(e) { console.error('Sabo joinRoom error:', e); }
     });
 
@@ -1479,7 +1486,7 @@ saboIo.on('connection', (socket) => {
                 const player = room.players.find(p => p.id === socket.id);
                 if (player) { 
                     player.ready = ready; 
-                    saboIo.to(roomCode).emit('roomUpdate', room); 
+                    emitSaboUpdate(roomCode, room); 
                 }
             }
         } catch(e) { console.error('Sabo playerReady error:', e); }
@@ -1648,7 +1655,7 @@ saboIo.on('connection', (socket) => {
                 startSaboTimer(room, roomCode, 60);
             }
 
-            saboIo.to(roomCode).emit('roomUpdate', room);
+            emitSaboUpdate(roomCode, room);
         } catch(e) { console.error('Sabo playCard error:', e); }
     });
 
@@ -1684,7 +1691,7 @@ saboIo.on('connection', (socket) => {
                         }
                     }
                 }
-                saboIo.to(roomCode).emit('roomUpdate', room);
+                emitSaboUpdate(roomCode, room);
             }
         } catch(e){ console.error('Sabo leaveRoom error:', e); }
     });
@@ -1713,10 +1720,10 @@ saboIo.on('connection', (socket) => {
                         if (room.players.length === 0) {
                             destroyRoom(saboRooms, saboDisconnectTimers, roomCode, saboIo);
                         } else {
-                            saboIo.to(roomCode).emit('roomUpdate', room);
+                            emitSaboUpdate(roomCode, room);
                         }
                     } else {
-                        saboIo.to(roomCode).emit('roomUpdate', room);
+                        emitSaboUpdate(roomCode, room);
                         
                         saboDisconnectTimers[disconnectKey] = setTimeout(() => {
                             delete saboDisconnectTimers[disconnectKey];
@@ -1744,7 +1751,7 @@ saboIo.on('connection', (socket) => {
                                         }
                                     }
                                 }
-                                saboIo.to(roomCode).emit('roomUpdate', currentRoom);
+                                emitSaboUpdate(roomCode, currentRoom);
                             }
                         }, 60000); 
                     }
