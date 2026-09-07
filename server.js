@@ -1291,15 +1291,52 @@ const SABO_ACTION_CARD_IMAGES = {
     '감옥탈출': 'https://masi4882.dothome.co.kr/sabo/68.jpg'
 };
 
-// ★ 딜럭스 룰: 덱 122장(굴 74 + 행동 48) 생성
+// ★ 딜럭스 룰: 덱 122장(굴 74 + 행동 48) 생성 (길카드 imgCode 반영 완료)
 function createSaboDeck() {
     const deck = [];
     let idCounter = 1;
 
-    for (let i = 0; i < 74; i++) {
-        deck.push({ id: `c${idCounter++}`, type: 'path', desc: '굴 카드', isPlayable: true });
-    }
+    // 길 카드 추가 도우미 함수 (프론트에 전달할 imgCode 포함)
+    const addPathCards = (imgCode, count, type, desc) => {
+        for (let i = 0; i < count; i++) {
+            deck.push({ 
+                id: `c${idCounter++}`, 
+                type: type, 
+                desc: desc, 
+                imgCode: imgCode, // ★ 프론트엔드가 이미지를 불러오는 핵심 키워드
+                isPlayable: true 
+            });
+        }
+    };
 
+    // ---------------- [일반 길 카드] ----------------
+    addPathCards('03', 4, 'path', '일반 길');
+    addPathCards('04', 3, 'path', '일반 길');
+    addPathCards('05', 5, 'path', '일반 길');
+    addPathCards('06', 4, 'path', '일반 길');
+    addPathCards('07', 5, 'path', '일반 길');
+    addPathCards('08', 5, 'path', '일반 길');
+    addPathCards('09', 5, 'path', '일반 길');
+    
+    const singlePathCodes = ['10','11','12','13','14','15','16','17','18','21','22','23','24','25','26','27','28'];
+    singlePathCodes.forEach(code => addPathCards(code, 1, 'path', '일반 길'));
+
+    // ---------------- [터널 길 카드] ----------------
+    addPathCards('29', 2, 'path', '터널 길 (연결됨)');
+
+    // ---------------- [수정 길 카드] ----------------
+    const singleCrystalCodes = ['31','32','33','34','36','37','38'];
+    singleCrystalCodes.forEach(code => addPathCards(code, 1, 'path', '수정 길'));
+    addPathCards('35', 3, 'path', '수정 길');
+
+    // ---------------- [색깔문 길 카드] ----------------
+    ['41','42','43'].forEach(code => addPathCards(code, 1, 'path', '초록문 길'));
+    ['44','45','46'].forEach(code => addPathCards(code, 1, 'path', '파란문 길'));
+
+    // ---------------- [사다리 길 카드 (시작점 효과)] ----------------
+    ['47','48','49','50'].forEach(code => addPathCards(code, 1, 'path', '사다리 길 (시작점)'));
+
+    // ---------------- [행동 카드 48장 추가] ----------------
     const addAction = (desc, imgKey, count) => {
         for (let i = 0; i < count; i++) {
             deck.push({ 
