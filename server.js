@@ -130,16 +130,9 @@ pokerIo.on('connection', (socket) => {
             
             if (!existingPlayer) {
                 if (room.phase !== 'LOBBY') {
-                    room.players.push({ 
-                        id: socket.id, userId, name: userName, isBot, 
-                        isSpectator: true, connected: true 
-                    });
+                    room.players.push({ id: socket.id, userId, name: userName, isBot, isSpectator: true, connected: true });
                 } else {
-                    room.players.push({ 
-                        id: socket.id, userId, name: userName, isBot, 
-                        ready: room.players.length === 0, score: 0, hand: [], penalties: [], handCount: 0, 
-                        connected: true, isReconnecting: false, isSpectator: false 
-                    });
+                    room.players.push({ id: socket.id, userId, name: userName, isBot, ready: room.players.length === 0, score: 0, hand: [], penalties: [], handCount: 0, connected: true, isReconnecting: false, isSpectator: false });
                 }
             } else {
                 const oldId = existingPlayer.id;
@@ -153,15 +146,12 @@ pokerIo.on('connection', (socket) => {
                     if (room.activeOffer.senderId === oldId) room.activeOffer.senderId = socket.id;
                     if (room.activeOffer.targetId === oldId) room.activeOffer.targetId = socket.id;
                     if (room.activeOffer.receiverId === oldId) room.activeOffer.receiverId = socket.id;
-                    if (room.activeOffer.seenIds) {
-                        room.activeOffer.seenIds = room.activeOffer.seenIds.map(id => id === oldId ? socket.id : id);
-                    }
+                    if (room.activeOffer.seenIds) room.activeOffer.seenIds = room.activeOffer.seenIds.map(id => id === oldId ? socket.id : id);
                 }
                 if (room.revealData) {
                     if (room.revealData.winnerId === oldId) room.revealData.winnerId = socket.id;
                     if (room.revealData.penaltyId === oldId) room.revealData.penaltyId = socket.id;
                 }
-                
                 room.paused = room.players.some(p => !p.connected && !p.isSpectator);
             }
             pokerIo.to(roomCode).emit('roomUpdate', room);
@@ -355,7 +345,7 @@ flip7Io.on('connection', (socket) => {
 });
 
 // ==========================================
-// 🗡️ [3] 쿠 전용 (Namespace: /coup)
+// 🗡️ [3] 쿠 전용
 // ==========================================
 const coupIo = io.of('/coup');
 const coupRooms = {};
@@ -1301,7 +1291,6 @@ function createSaboDeck() {
     const deck = [];
     let idCounter = 1;
 
-    // 행동 카드 생성 함수 (이미지가 자동으로 매핑되도록 생성)
     const addAction = (desc, imgKey, count) => {
         for (let i = 0; i < count; i++) {
             deck.push({ 
@@ -1314,7 +1303,6 @@ function createSaboDeck() {
         }
     };
 
-    // 행동 카드들 삽입
     addAction('곡괭이 파괴', '파괴_곡괭이', 3);
     addAction('랜턴 파괴', '파괴_랜턴', 3);
     addAction('수레 파괴', '파괴_수레', 3);
@@ -1330,13 +1318,10 @@ function createSaboDeck() {
     addAction('도착점 확인', '도착점확인', 6);
     addAction('낙석', '낙석', 3);
 
-    // 기본 길 카드 더미 데이터 
-    // (이후 사보타지 길 카드 디자인이 추가되면 이 부분을 수정하시면 됩니다)
     for (let i = 0; i < 40; i++) {
         deck.push({ id: `c${idCounter++}`, type: 'path', desc: '십자 길', isPlayable: true });
     }
 
-    // 덱을 무작위로 섞음
     return deck.sort(() => Math.random() - 0.5);
 }
 
@@ -1366,7 +1351,7 @@ saboIo.on('connection', (socket) => {
                     name: userName, 
                     userId, 
                     isBot, 
-                    ready: room.players.length === 0, // 첫 접속자가 방장
+                    ready: room.players.length === 0, 
                     gold: 0, 
                     tools: { pickaxe: true, lantern: true, cart: true }, 
                     thief: false, 
@@ -1405,11 +1390,10 @@ saboIo.on('connection', (socket) => {
             room.round = 1;
             room.maxRound = 3;
             
-            // 덱(Deck) 생성
             room.deck = createSaboDeck();
             
-            // 플레이어 인원에 따라 초기 손패 개수 설정 (보통 3~5인: 6장, 6~7인: 5장, 8~10인: 4장)
-            const cardsPerPlayer = room.players.length <= 5 ? 6 : (room.players.length <= 7 ? 5 : 4);
+            // ★ 모든 플레이어가 인원수와 상관없이 "무조건 6장"을 지급받도록 강제 고정
+            const cardsPerPlayer = 6;
             
             room.players.forEach(p => {
                 p.hand = [];
@@ -1417,7 +1401,6 @@ saboIo.on('connection', (socket) => {
                     if(room.deck.length > 0) p.hand.push(room.deck.pop());
                 }
                 p.gold = 0;
-                // 장비 기본 고장 없음
                 p.tools = { pickaxe: true, lantern: true, cart: true };
                 p.thief = false;
                 p.trapped = false;
@@ -1425,7 +1408,6 @@ saboIo.on('connection', (socket) => {
             
             room.deckCount = room.deck.length;
             
-            // 게임 시작 이벤트 프론트엔드로 전달
             saboIo.to(roomCode).emit('gameStarted', room);
         } catch(e) { console.error('Sabo startGame error:', e); }
     });
@@ -1478,7 +1460,6 @@ saboIo.on('connection', (socket) => {
                             saboIo.to(roomCode).emit('roomUpdate', room);
                         }
                     } else {
-                        // 게임 중 접속 끊김 처리
                         saboIo.to(roomCode).emit('roomUpdate', room);
                         
                         saboDisconnectTimers[disconnectKey] = setTimeout(() => {
@@ -1492,7 +1473,7 @@ saboIo.on('connection', (socket) => {
                             } else {
                                 saboIo.to(roomCode).emit('roomUpdate', currentRoom);
                             }
-                        }, 60000); // 60초 후 완전히 쫓아냄
+                        }, 60000); 
                     }
                 }
             }
