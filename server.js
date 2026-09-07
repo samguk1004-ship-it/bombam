@@ -1528,6 +1528,7 @@ saboIo.on('connection', (socket) => {
             
             room.deckCount = room.deck.length;
             
+            // 다시 랜덤으로 첫 턴 시작 지정
             room.turnIndex = Math.floor(Math.random() * room.players.length);
             room.turnId = room.players[room.turnIndex].id;
             
