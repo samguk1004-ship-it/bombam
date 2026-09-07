@@ -1327,7 +1327,7 @@ function createSaboDeck() {
     ['41','42','43'].forEach(code => addPathCards(code, 1, 'path', '초록문 길'));
     ['44','45','46'].forEach(code => addPathCards(code, 1, 'path', '파란문 길'));
 
-    ['47','48','49','50'].forEach(code => addPathCards(code, 1, 'path', '사다리 길 (시작점)');
+    ['47','48','49','50'].forEach(code => addPathCards(code, 1, 'path', '사다리 길 (시작점)'));
 
     const addAction = (desc, imgKey, count) => {
         for (let i = 0; i < count; i++) {
@@ -1465,21 +1465,27 @@ saboIo.on('connection', (socket) => {
         } catch(e) { console.error('Sabo startGame error:', e); }
     });
 
-    // ★ isDiscard 속성 처리 추가
-    socket.on('playCard', ({ roomCode, card, targetId, slot, isRotated, isDiscard }) => {
+    // ★ isDiscard 속성 처리 및 다중 카드 배열 전송 처리 연동 완료
+    socket.on('playCard', ({ roomCode, card, cards, targetId, slot, isRotated, isDiscard }) => {
         try {
             const room = saboRooms[roomCode];
             if (!room || room.phase !== 'GAME') return;
 
             const player = room.players.find(p => p.id === socket.id);
-            if (!player || room.turnId !== socket.id) return; // 자신의 턴인지 서버에서도 한 번 더 검증
+            if (!player || room.turnId !== socket.id) return; 
 
-            // ★ 카드 버리기 로직 처리
+            // ★ 카드 버리기 처리 (여러 장 지원)
             if (isDiscard) {
-                player.hand = player.hand.filter(c => c.id !== card.id);
-                if (room.deck.length > 0) {
-                    player.hand.push(room.deck.pop());
+                const discardCards = cards || (card ? [card] : []);
+                if (discardCards.length === 0) return;
+                
+                const discardIds = discardCards.map(c => c.id);
+                player.hand = player.hand.filter(c => !discardIds.includes(c.id));
+                
+                for (let i = 0; i < discardIds.length; i++) {
+                    if (room.deck.length > 0) player.hand.push(room.deck.pop());
                 }
+                
                 room.turnIndex = (room.turnIndex + 1) % room.players.length;
                 room.turnId = room.players[room.turnIndex].id;
                 room.deckCount = room.deck.length;
@@ -1487,6 +1493,8 @@ saboIo.on('connection', (socket) => {
                 return;
             }
 
+            // ★ 일반 단일 카드 사용 처리
+            if (!card) return;
             const target = targetId ? room.players.find(p => p.id === targetId || p.userId === targetId) : null;
             const d = (card.desc || '').replace(/\s+/g, '');
 
