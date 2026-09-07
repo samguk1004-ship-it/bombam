@@ -1295,14 +1295,8 @@ function emitSaboUpdate(roomCode, room) {
     delete safeRoom.deck;
     delete safeRoom.goldRow;
     
-    // 게임 중일 경우 타인의 직업 정보를 숨김 처리
-    if (safeRoom.players) {
-        safeRoom.players = safeRoom.players.map(p => ({
-            ...p,
-            role: (room.phase === 'GAME' ? null : p.role)
-        }));
-    }
-
+    // 이제 서버에서 플레이어 역할을 숨기지 않습니다. 클라이언트가 남의 역할을 가립니다. (툴팁 버그 수정)
+    
     saboIo.to(roomCode).emit('roomUpdate', safeRoom);
 }
 
@@ -1338,10 +1332,15 @@ function autoPlaySaboTurn(room, roomCode) {
         if (player.hand && player.hand.length > 0) {
             const randomIdx = Math.floor(Math.random() * player.hand.length);
             const discardCard = player.hand[randomIdx];
+            
+            const beforeCount = player.hand.length;
             player.hand = player.hand.filter(c => c.id !== discardCard.id);
-            if (room.deck.length > 0) player.hand.push(room.deck.shift());
+            const removedCount = beforeCount - player.hand.length;
+            for (let i = 0; i < removedCount; i++) {
+                if (room.deck && room.deck.length > 0) player.hand.push(room.deck.shift());
+            }
         }
-        saboIo.to(roomCode).emit('actionAnnounce', { actorName: '시스템', actionText: `시간 초과! ${player.name}님의 턴이 강제로 넘어갑니다.` });
+        saboIo.to(roomCode).emit('actionAnnounce', { actionText: `시간 초과! ${player.name}님의 턴이 강제로 넘어갑니다.` });
     }
     
     if (checkSaboRoundEnd(room)) return;
@@ -1356,6 +1355,7 @@ function autoPlaySaboTurn(room, roomCode) {
         loopCount < room.players.length
     );
     startSaboTimer(room, roomCode, 60);
+    emitSaboUpdate(roomCode, room);
 }
 
 function checkSaboRoundEnd(room) {
@@ -1363,6 +1363,7 @@ function checkSaboRoundEnd(room) {
     const allHandsEmpty = room.players.every(p => !p.hand || p.hand.length === 0);
     if (isDeckEmpty && allHandsEmpty) {
         endSaboRound(room, false); // 광부 목적지 도달 실패 = 방해꾼 팀 승리
+        emitSaboUpdate(room.roomCode, room);
         return true;
     }
     return false;
@@ -1597,8 +1598,14 @@ saboIo.on('connection', (socket) => {
                 const discardCards = cards || (card ? [card] : []);
                 if (discardCards.length > 0) {
                     const discardIds = discardCards.map(c => c.id);
+                    const beforeCount = player.hand.length;
                     player.hand = player.hand.filter(c => !discardIds.includes(c.id));
-                    for (let i = 0; i < discardIds.length; i++) { if (room.deck.length > 0) player.hand.push(room.deck.shift()); }
+                    
+                    // 버린 개수만큼 철저하게 보충 보장
+                    const removedCount = beforeCount - player.hand.length;
+                    for (let i = 0; i < removedCount; i++) {
+                        if (room.deck && room.deck.length > 0) player.hand.push(room.deck.shift());
+                    }
                 }
                 actionText = `${player.name}님이 카드를 버렸습니다.`;
                 saboIo.to(roomCode).emit('actionAnnounce', { actionText });
@@ -1651,7 +1658,7 @@ saboIo.on('connection', (socket) => {
                             actionText = `🪨 ${player.name}님이 낙석을 일으켰습니다!`;
                         } else if (d.includes('지도') || d.includes('도착') || d.includes('확인')) {
                             const isGold = (slot.row === room.goldRow);
-                            io.of('/sabo').to(socket.id).emit('mapCheckResult', { row: slot.row, type: isGold ? 'gold' : 'coal' });
+                            saboIo.to(socket.id).emit('mapCheckResult', { row: slot.row, type: isGold ? 'gold' : 'coal' });
                             actionText = `🗺️ ${player.name}님이 지도를 은밀하게 확인했습니다.`;
                         } else if (card.type === 'path') {
                             if (!room.board) room.board = [];
@@ -1681,14 +1688,20 @@ saboIo.on('connection', (socket) => {
                             }
                         }
                     }
+                    
+                    // 플레이한 카드 삭제 후 100% 확정 보충
+                    const beforeCount = player.hand.length;
                     player.hand = player.hand.filter(c => c.id !== card.id);
-                    if(room.deck.length > 0) { player.hand.push(room.deck.shift()); }
+                    const removedCount = beforeCount - player.hand.length;
+                    for (let i = 0; i < removedCount; i++) {
+                        if (room.deck && room.deck.length > 0) player.hand.push(room.deck.shift());
+                    }
+                    
                     saboIo.to(roomCode).emit('actionAnnounce', { actionText });
                 }
             }
 
             if (checkSaboRoundEnd(room)) {
-                emitSaboUpdate(roomCode, room);
                 return;
             }
 
