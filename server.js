@@ -1394,7 +1394,6 @@ function startSaboTimer(room, roomCode, durationSec) {
 }
 
 function autoPlaySaboTurn(room, roomCode) {
-    // [추가] 지도 확인 상태에서 시간이 초과되면 강제로 확인 처리하고 턴을 넘깁니다
     if (room.phase === 'WAIT_MAP_CONFIRM') {
         room.phase = 'GAME';
         const player = room.players.find(p => p.id === room.mapCheckData.actorId);
@@ -1467,7 +1466,6 @@ function endSaboRound(room, isMinerWin) {
     room.phase = 'ROUND_END';
     
     room.players.forEach(p => {
-        // 장비 파손과 상관 없이 감옥(trapped) 상태일 때만 보상을 받지 못함
         const isPenalized = p.trapped; 
         let earnedGold = 0;
         
@@ -1486,7 +1484,6 @@ function endSaboRound(room, isMinerWin) {
         p.gold = (p.gold || 0) + earnedGold;
     });
 
-    // 도둑 로직 자동 진행 (감옥이면 제외)
     room.players.forEach(p => {
         if (p.thief && !p.trapped) {
             const targets = room.players.filter(t => t.id !== p.id && t.gold > 0);
@@ -1601,33 +1598,35 @@ function createSaboDeck() {
 saboIo.on('connection', (socket) => {
     socket.on('pingHeartbeat', () => { socket.emit('pongHeartbeat'); });
     
-    // [추가] 클라이언트에서 지도 확인 완료 버튼을 눌렀을 때 턴을 넘기는 로직
-    socket.on('confirmMapCheck', ({ roomCode }) => {
+    // [추가] 클라이언트에서 지도 확인 완료 버튼을 눌렀을 때, 모든 클라이언트에 신호를 보내 카드를 치우고 턴을 넘깁니다.
+    socket.on('mapCheckDone', ({ roomCode, row }) => {
         try {
             const room = saboRooms[roomCode];
-            if (!room || room.phase !== 'WAIT_MAP_CONFIRM') return;
-            if (room.mapCheckData && room.mapCheckData.actorId !== socket.id) return;
+            if (!room) return;
 
-            room.phase = 'GAME';
-            const player = room.players.find(p => p.id === socket.id);
-            if (player) {
-                saboIo.to(roomCode).emit('actionAnnounce', { actionText: `🗺️ ${player.name}님이 지도 확인을 완료했습니다.` });
+            // 본인을 포함해 방에 있는 모든 사람에게 맵 덮개를 치우라는 신호 전송
+            saboIo.to(roomCode).emit('mapCheckDone', { row });
+
+            if (room.phase === 'WAIT_MAP_CONFIRM' && room.mapCheckData && room.mapCheckData.actorId === socket.id) {
+                room.phase = 'GAME';
+                const player = room.players.find(p => p.id === socket.id);
+                if (player) {
+                    saboIo.to(roomCode).emit('actionAnnounce', { actionText: `🗺️ ${player.name}님이 지도 확인을 완료했습니다.` });
+                }
+                room.mapCheckData = null;
+
+                if (checkSaboRoundEnd(room)) return;
+
+                let loopCount = 0;
+                do {
+                    room.turnIndex = (room.turnIndex + 1) % room.players.length;
+                    room.turnId = room.players[room.turnIndex].id;
+                    loopCount++;
+                } while ((!room.players[room.turnIndex].hand || room.players[room.turnIndex].hand.length === 0) && loopCount < room.players.length);
+                
+                startSaboTimer(room, roomCode, 60);
+                emitSaboUpdate(roomCode, room);
             }
-            // 덮어둔 카드를 치우도록 클라이언트들에 신호 전송
-            saboIo.to(roomCode).emit('mapCheckDone', { row: room.mapCheckData.row });
-            room.mapCheckData = null;
-
-            if (checkSaboRoundEnd(room)) return;
-
-            let loopCount = 0;
-            do {
-                room.turnIndex = (room.turnIndex + 1) % room.players.length;
-                room.turnId = room.players[room.turnIndex].id;
-                loopCount++;
-            } while ((!room.players[room.turnIndex].hand || room.players[room.turnIndex].hand.length === 0) && loopCount < room.players.length);
-            
-            startSaboTimer(room, roomCode, 60);
-            emitSaboUpdate(roomCode, room);
         } catch(e) { console.error(e); }
     });
 
@@ -1719,26 +1718,28 @@ saboIo.on('connection', (socket) => {
             let actionText = `${player.name}님이 카드를 사용했습니다.`;
 
             if (isDiscard) {
-                let idsToRemove = discardIds || [];
-                if (idsToRemove.length === 0 && cards && Array.isArray(cards)) {
+                // [수정] 카드 버리기 로직 최적화 및 캔슬 버그 해결
+                let idsToRemove = [];
+                if (discardIds && Array.isArray(discardIds) && discardIds.length > 0) {
+                    idsToRemove = discardIds;
+                } else if (cards && Array.isArray(cards) && cards.length > 0) {
                     idsToRemove = cards.map(c => c.id);
-                }
-                if (idsToRemove.length === 0 && card && card.id) {
+                } else if (card && card.id) {
                     idsToRemove = [card.id];
                 }
 
                 if (idsToRemove.length > 0) {
                     let removedCount = 0;
-                    const newHand = [];
-                    for (const c of player.hand) {
+                    // 버리는 카드를 패에서 제거하고 개수만큼 카운트
+                    player.hand = player.hand.filter(c => {
                         if (idsToRemove.includes(c.id)) {
                             removedCount++;
-                        } else {
-                            newHand.push(c);
+                            return false;
                         }
-                    }
-                    player.hand = newHand; 
+                        return true;
+                    });
                     
+                    // 제거된 개수만큼 덱에서 새로운 카드를 보충
                     for (let i = 0; i < removedCount; i++) {
                         if (room.deck && room.deck.length > 0) {
                             player.hand.push(room.deck.shift());
@@ -1756,14 +1757,27 @@ saboIo.on('connection', (socket) => {
 
                     if (target) {
                         if (d.includes('파괴') || d.includes('수리')) {
+                            // [수정] 대상이 되는 정확한 장비 이름 표출 로직
+                            let eqName = '장비';
+                            if (equipType === 'pickaxe') eqName = '곡괭이';
+                            else if (equipType === 'lantern') eqName = '랜턴';
+                            else if (equipType === 'cart') eqName = '수레';
+                            else {
+                                let parts = [];
+                                if (d.includes('곡괭이')) parts.push('곡괭이');
+                                if (d.includes('랜턴')) parts.push('랜턴');
+                                if (d.includes('수레')) parts.push('수레');
+                                if (parts.length > 0) eqName = parts.join('/');
+                            }
+
                             if (d.includes('파괴')) {
                                 if (equipType) target.tools[equipType] = false;
                                 else { if (d.includes('곡괭이')) target.tools.pickaxe = false; if (d.includes('랜턴')) target.tools.lantern = false; if (d.includes('수레')) target.tools.cart = false; }
-                                actionText = `💥 ${player.name}님이 ${target.name}의 장비를 파괴했습니다!`;
+                                actionText = `💥 ${player.name}님이 ${target.name}의 (${eqName})을(를) 파괴했습니다!`;
                             } else if (d.includes('수리')) {
                                 if (equipType) target.tools[equipType] = true;
                                 else { if (d.includes('곡괭이')) target.tools.pickaxe = true; if (d.includes('랜턴')) target.tools.lantern = true; if (d.includes('수레')) target.tools.cart = true; }
-                                actionText = `🔧 ${player.name}님이 ${target.name}의 장비를 고쳐주었습니다!`;
+                                actionText = `🔧 ${player.name}님이 ${target.name}의 (${eqName})을(를) 고쳐주었습니다!`;
                             }
                         }
                         else if (d.includes('염탐') || d.includes('정보확인')) { 
@@ -1801,7 +1815,6 @@ saboIo.on('connection', (socket) => {
                             actionText = `🪨 ${player.name}님이 낙석을 일으켰습니다!`;
                         } else if (d.includes('지도') || d.includes('도착') || d.includes('확인')) {
                             
-                            // [수정] 지도 카드 사용 시 대기 및 확인 버튼 로직 적용
                             saboIo.to(roomCode).emit('mapCheckAnim', { col: slot.col, row: slot.row, actorId: player.id });
                             const isGold = (slot.row === room.goldRow);
                             saboIo.to(socket.id).emit('mapCheckResult', { row: slot.row, type: isGold ? 'gold' : 'coal' });
@@ -1819,12 +1832,10 @@ saboIo.on('connection', (socket) => {
                             
                             saboIo.to(roomCode).emit('actionAnnounce', { actionText });
 
-                            // 턴을 넘기지 않고 대기 상태로 변경
                             room.phase = 'WAIT_MAP_CONFIRM';
                             room.mapCheckData = { actorId: player.id, row: slot.row };
                             
                             if (player.isBot) {
-                                // 봇인 경우 3초 뒤 스스로 확인 버튼을 누른 것처럼 처리
                                 setTimeout(() => {
                                     const r = saboRooms[roomCode];
                                     if (r && r.phase === 'WAIT_MAP_CONFIRM' && r.mapCheckData?.actorId === player.id) {
@@ -1844,11 +1855,10 @@ saboIo.on('connection', (socket) => {
                                     }
                                 }, 3000);
                             } else {
-                                // 실제 유저인 경우 무한정 멈추지 않도록 15초 타이머 부여
                                 startSaboTimer(room, roomCode, 15); 
                             }
                             emitSaboUpdate(roomCode, room);
-                            return; // 턴을 여기서 끝내지 않고 함수를 빠져나갑니다.
+                            return; 
                             
                         } else if (card.type === 'path') {
                             saboIo.to(roomCode).emit('pathCardAnim', { col: slot.col, row: slot.row, imgCode: card.imgCode, isRotated: isRotated || false, actorId: player.id });
@@ -1866,7 +1876,6 @@ saboIo.on('connection', (socket) => {
                                         if (isGold) {
                                             saboIo.to(roomCode).emit('actionAnnounce', { actionText: `🎉 ${player.name}님이 금덩이를 발견했습니다!` });
                                             
-                                            // 핸드에서 쓴 카드 버리기 및 보충
                                             let removedCount = 0;
                                             const idx = player.hand.findIndex(c => c.id === card.id);
                                             if (idx !== -1) { player.hand.splice(idx, 1); removedCount++; }
@@ -1935,7 +1944,6 @@ saboIo.on('connection', (socket) => {
             
             const wasTheirTurn = room.turnId === socket.id;
             
-            // [추가] 지도 확인 중에 퇴장해버리면 무한정 멈추는 것 방지
             if (room.phase === 'WAIT_MAP_CONFIRM' && room.mapCheckData?.actorId === socket.id) {
                 room.phase = 'GAME';
                 saboIo.to(roomCode).emit('mapCheckDone', { row: room.mapCheckData.row });
@@ -1986,7 +1994,6 @@ saboIo.on('connection', (socket) => {
                             delete saboDisconnectTimers[disconnectKey]; const currentRoom = saboRooms[roomCode]; if (!currentRoom) return;
                             const wasTheirTurn = currentRoom.turnId === player.id; currentRoom.players = currentRoom.players.filter(p => p.userId !== player.userId);
                             
-                            // [추가] 지도 확인 중에 퇴장해버리면 무한정 멈추는 것 방지
                             if (currentRoom.phase === 'WAIT_MAP_CONFIRM' && currentRoom.mapCheckData?.actorId === player.id) {
                                 currentRoom.phase = 'GAME';
                                 saboIo.to(roomCode).emit('mapCheckDone', { row: currentRoom.mapCheckData.row });
