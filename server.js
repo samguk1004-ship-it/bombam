@@ -1295,8 +1295,6 @@ function emitSaboUpdate(roomCode, room) {
     delete safeRoom.deck;
     delete safeRoom.goldRow;
     
-    // 이제 서버에서 플레이어 역할을 숨기지 않습니다. 클라이언트가 남의 역할을 가립니다. (툴팁 버그 수정)
-    
     saboIo.to(roomCode).emit('roomUpdate', safeRoom);
 }
 
@@ -1362,7 +1360,7 @@ function checkSaboRoundEnd(room) {
     const isDeckEmpty = !room.deck || room.deck.length === 0;
     const allHandsEmpty = room.players.every(p => !p.hand || p.hand.length === 0);
     if (isDeckEmpty && allHandsEmpty) {
-        endSaboRound(room, false); // 광부 목적지 도달 실패 = 방해꾼 팀 승리
+        endSaboRound(room, false); 
         emitSaboUpdate(room.roomCode, room);
         return true;
     }
@@ -1385,14 +1383,12 @@ function endSaboRound(room, isMinerWin) {
                 if (p.role === '방해꾼') earnedGold = 3;
                 if (p.role === '부당이익자') earnedGold = 1;
             }
-            // 지질학자 보너스 (1~3개 무작위)
             if (p.role === '지질학자') earnedGold = Math.floor(Math.random() * 3) + 1;
         }
         
         p.gold = (p.gold || 0) + earnedGold;
     });
 
-    // 도둑 효과 적용 (각 도둑은 금을 가진 무작위 대상의 금 1개를 훔침)
     room.players.forEach(p => {
         if (p.thief) {
             const targets = room.players.filter(t => t.id !== p.id && t.gold > 0);
@@ -1409,11 +1405,10 @@ function startSaboRound(room) {
     room.phase = 'GAME';
     room.board = [];
     room.deck = createSaboDeck();
-    room.deck.splice(0, 10); // 카드 10장 뒷면 제외 (규칙 기준)
+    room.deck.splice(0, 10); 
     
     room.goldRow = SABO_DEST_ROWS[Math.floor(Math.random() * SABO_DEST_ROWS.length)];
     
-    // 역할 분배
     const ALL_SABO_ROLES = [
         '파란광부', '파란광부', '파란광부', '파란광부', 
         '초록광부', '초록광부', '초록광부', '초록광부',
@@ -1601,7 +1596,6 @@ saboIo.on('connection', (socket) => {
                     const beforeCount = player.hand.length;
                     player.hand = player.hand.filter(c => !discardIds.includes(c.id));
                     
-                    // 버린 개수만큼 철저하게 보충 보장
                     const removedCount = beforeCount - player.hand.length;
                     for (let i = 0; i < removedCount; i++) {
                         if (room.deck && room.deck.length > 0) player.hand.push(room.deck.shift());
@@ -1654,7 +1648,10 @@ saboIo.on('connection', (socket) => {
                     } else if (slot) {
                         if (d.includes('낙석') || d.includes('붕괴') || d.includes('길파괴')) {
                             const bIdx = room.board.findIndex(c => c.col === slot.col && c.row === slot.row);
-                            if (bIdx !== -1) room.board.splice(bIdx, 1);
+                            if (bIdx !== -1) {
+                                saboIo.to(roomCode).emit('rockfallAnim', { col: slot.col, row: slot.row, imgCode: room.board[bIdx].imgCode });
+                                room.board.splice(bIdx, 1);
+                            }
                             actionText = `🪨 ${player.name}님이 낙석을 일으켰습니다!`;
                         } else if (d.includes('지도') || d.includes('도착') || d.includes('확인')) {
                             const isGold = (slot.row === room.goldRow);
@@ -1666,15 +1663,15 @@ saboIo.on('connection', (socket) => {
                             actionText = `${player.name}님이 길을 개척했습니다!`;
 
                             // 목적지(10열)에 도달했는지 확인
-            const isNearDest = (slot.col === 9 && SABO_DEST_ROWS.includes(slot.row));
-            if (isNearDest || slot.col === 10) {
-                const targetRow = slot.col === 10 ? slot.row : slot.row;
-                if (SABO_DEST_ROWS.includes(targetRow)) {
-                    if (!room.board.find(b => b.col === 10 && b.row === targetRow)) {
-                        const isGold = (targetRow === room.goldRow);
-                        room.board.push({ col: 10, row: targetRow, imgCode: isGold ? '02' : '03', isRotated: false });
-                        
-                        if (isGold) {
+                            const isNearDest = (slot.col === 9 && SABO_DEST_ROWS.includes(slot.row));
+                            if (isNearDest || slot.col === 10) {
+                                const targetRow = slot.col === 10 ? slot.row : slot.row;
+                                if (SABO_DEST_ROWS.includes(targetRow)) {
+                                    if (!room.board.find(b => b.col === 10 && b.row === targetRow)) {
+                                        const isGold = (targetRow === room.goldRow);
+                                        room.board.push({ col: 10, row: targetRow, imgCode: isGold ? '02' : '03', isRotated: false });
+                                        
+                                        if (isGold) {
                                             saboIo.to(roomCode).emit('actionAnnounce', { actionText: `🎉 ${player.name}님이 금덩이를 발견했습니다!` });
                                             player.hand = player.hand.filter(c => c.id !== card.id);
                                             endSaboRound(room, true);
@@ -1689,7 +1686,6 @@ saboIo.on('connection', (socket) => {
                         }
                     }
                     
-                    // 플레이한 카드 삭제 후 100% 확정 보충
                     const beforeCount = player.hand.length;
                     player.hand = player.hand.filter(c => c.id !== card.id);
                     const removedCount = beforeCount - player.hand.length;
