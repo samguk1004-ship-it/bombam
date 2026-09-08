@@ -1592,13 +1592,17 @@ saboIo.on('connection', (socket) => {
             if (isDiscard) {
                 const discardCards = cards || (card ? [card] : []);
                 if (discardCards.length > 0) {
+                    // ID를 기준으로 버려질 카드를 찾아서 삭제하고, 삭제한 개수만큼 덱에서 보충
                     const discardIds = discardCards.map(c => c.id);
-                    const beforeCount = player.hand.length;
+                    const initialHandSize = player.hand.length;
+                    
                     player.hand = player.hand.filter(c => !discardIds.includes(c.id));
                     
-                    const removedCount = beforeCount - player.hand.length;
+                    const removedCount = initialHandSize - player.hand.length;
                     for (let i = 0; i < removedCount; i++) {
-                        if (room.deck && room.deck.length > 0) player.hand.push(room.deck.shift());
+                        if (room.deck && room.deck.length > 0) {
+                            player.hand.push(room.deck.shift());
+                        }
                     }
                 }
                 actionText = `${player.name}님이 카드를 버렸습니다.`;
@@ -1654,7 +1658,6 @@ saboIo.on('connection', (socket) => {
                             }
                             actionText = `🪨 ${player.name}님이 낙석을 일으켰습니다!`;
                         } else if (d.includes('지도') || d.includes('도착') || d.includes('확인')) {
-                            // 지도 덮기 애니메이션을 방 전체에 브로드캐스트 (클라이언트에서 본인/타인 분기하여 처리)
                             saboIo.to(roomCode).emit('mapCheckAnim', { col: slot.col, row: slot.row, actorId: player.id });
                             
                             const isGold = (slot.row === room.goldRow);
@@ -1675,7 +1678,7 @@ saboIo.on('connection', (socket) => {
                                 if (SABO_DEST_ROWS.includes(targetRow)) {
                                     if (!room.board.find(b => b.col === 10 && b.row === targetRow)) {
                                         const isGold = (targetRow === room.goldRow);
-                                        room.board.push({ col: 10, row: targetRow, imgCode: isGold ? '02' : '03', isRotated: false });
+                                        room.board.push({ col: 10, row: targetRow, imgCode: isGold ? '01' : '02', isRotated: false });
                                         
                                         if (isGold) {
                                             saboIo.to(roomCode).emit('actionAnnounce', { actionText: `🎉 ${player.name}님이 금덩이를 발견했습니다!` });
