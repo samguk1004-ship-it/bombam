@@ -1666,15 +1666,15 @@ saboIo.on('connection', (socket) => {
                             actionText = `${player.name}님이 길을 개척했습니다!`;
 
                             // 목적지(10열)에 도달했는지 확인
-                            const isNearDest = (slot.col === 9 && SABO_DEST_ROWS.includes(slot.row));
-                            if (isNearDest || slot.col === 10) {
-                                const targetRow = slot.col === 10 ? slot.row : slot.row;
-                                if (SABO_DEST_ROWS.includes(targetRow)) {
-                                    if (!room.board.find(b => b.col === 10 && b.row === targetRow)) {
-                                        const isGold = (targetRow === room.goldRow);
-                                        room.board.push({ col: 10, row: targetRow, imgCode: isGold ? '10' : '11', isRotated: false });
-                                        
-                                        if (isGold) {
+            const isNearDest = (slot.col === 9 && SABO_DEST_ROWS.includes(slot.row));
+            if (isNearDest || slot.col === 10) {
+                const targetRow = slot.col === 10 ? slot.row : slot.row;
+                if (SABO_DEST_ROWS.includes(targetRow)) {
+                    if (!room.board.find(b => b.col === 10 && b.row === targetRow)) {
+                        const isGold = (targetRow === room.goldRow);
+                        room.board.push({ col: 10, row: targetRow, imgCode: isGold ? '02' : '03', isRotated: false });
+                        
+                        if (isGold) {
                                             saboIo.to(roomCode).emit('actionAnnounce', { actionText: `🎉 ${player.name}님이 금덩이를 발견했습니다!` });
                                             player.hand = player.hand.filter(c => c.id !== card.id);
                                             endSaboRound(room, true);
