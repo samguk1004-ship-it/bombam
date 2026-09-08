@@ -1443,7 +1443,6 @@ function endSaboRound(room, isMinerWin) {
     room.phase = 'ROUND_END';
     
     room.players.forEach(p => {
-        // [수정됨] 장비 파손과 상관 없이 감옥(trapped) 상태일 때만 보상을 받지 못함
         const isPenalized = p.trapped; 
         let earnedGold = 0;
         
@@ -1462,7 +1461,6 @@ function endSaboRound(room, isMinerWin) {
         p.gold = (p.gold || 0) + earnedGold;
     });
 
-    // 2번 직접 선택 항목 삭제(취소) -> 기존 랜덤 도둑 스틸 자동 로직 복원 (단, 감옥에 있을 땐 도둑질도 불가)
     room.players.forEach(p => {
         if (p.thief && !p.trapped) {
             const targets = room.players.filter(t => t.id !== p.id && t.gold > 0);
@@ -1653,7 +1651,7 @@ saboIo.on('connection', (socket) => {
         } catch(e) {}
     });
 
-    socket.on('playCard', ({ roomCode, card, cards, targetId, slot, isRotated, isDiscard, equipType }) => {
+    socket.on('playCard', ({ roomCode, card, cards, discardIds, targetId, slot, isRotated, isDiscard, equipType }) => {
         try {
             const room = saboRooms[roomCode];
             if (!room || room.phase !== 'GAME') return;
@@ -1665,26 +1663,36 @@ saboIo.on('connection', (socket) => {
             let actionText = `${player.name}님이 카드를 사용했습니다.`;
 
             if (isDiscard) {
-                // [수정됨] 카드 버리기 로직 강화: 다중 선택 및 단일 선택 모두 완벽하게 매칭하여 핸드에서 제거하고 덱에서 보충
-                let discardIds = [];
-                if (cards && Array.isArray(cards)) {
-                    discardIds = cards.map(c => c.id);
-                } else if (card && card.id) {
-                    discardIds = [card.id];
+                // 클라이언트에서 전달받은 discardIds(문자열 배열)를 바로 사용하여 삭제
+                let idsToRemove = discardIds || [];
+                if (idsToRemove.length === 0 && cards && Array.isArray(cards)) {
+                    idsToRemove = cards.map(c => c.id);
+                }
+                if (idsToRemove.length === 0 && card && card.id) {
+                    idsToRemove = [card.id];
                 }
 
-                if (discardIds.length > 0) {
-                    const initialLen = player.hand.length;
-                    player.hand = player.hand.filter(c => !discardIds.includes(c.id));
-                    const removedCount = initialLen - player.hand.length;
+                if (idsToRemove.length > 0) {
+                    let removedCount = 0;
+                    const newHand = [];
+                    for (const c of player.hand) {
+                        if (idsToRemove.includes(c.id)) {
+                            removedCount++;
+                        } else {
+                            newHand.push(c);
+                        }
+                    }
+                    player.hand = newHand; // 삭제 완료된 배열 교체
                     
                     for (let i = 0; i < removedCount; i++) {
                         if (room.deck && room.deck.length > 0) {
                             player.hand.push(room.deck.shift());
                         }
                     }
+                    actionText = `${player.name}님이 카드를 버렸습니다.`;
+                } else {
+                    actionText = `${player.name}님이 턴을 넘겼습니다.`;
                 }
-                actionText = `${player.name}님이 카드를 버렸습니다.`;
                 saboIo.to(roomCode).emit('actionAnnounce', { actionText });
             } else {
                 if (card) {
@@ -1748,24 +1756,7 @@ saboIo.on('connection', (socket) => {
                             room.board.push({ id: card.id, type: card.type, desc: card.desc, imgCode: card.imgCode, col: slot.col, row: slot.row, isRotated: isRotated || false });
                             actionText = `${player.name}님이 길을 개척했습니다!`;
 
-                            // 목적지 도달 시 연결 방향 엄격히 확인
-                            const placedEdges = getCardEdges(card.imgCode, isRotated);
-                            let triggeredRows = [];
-
-                            if (slot.col === 9 && placedEdges.right === 1 && SABO_DEST_ROWS.includes(slot.row)) {
-                                triggeredRows.push(slot.row);
-                            }
-                            if (slot.col === 10 && placedEdges.top === 1 && SABO_DEST_ROWS.includes(slot.row - 1)) {
-                                triggeredRows.push(slot.row - 1);
-                            }
-                            if (slot.col === 10 && placedEdges.bottom === 1 && SABO_DEST_ROWS.includes(slot.row + 1)) {
-                                triggeredRows.push(slot.row + 1);
-                            }
-                            if (slot.col === 11 && placedEdges.left === 1 && SABO_DEST_ROWS.includes(slot.row)) {
-                                triggeredRows.push(slot.row);
-                            }
-
-                            for (const targetRow of triggeredRows) {
+                            for (const targetRow of SABO_DEST_ROWS) {
                                 if (!room.board.find(b => b.col === 10 && b.row === targetRow)) {
                                     if (isDestConnectedToStart(room.board, 10, targetRow)) {
                                         const isGold = (targetRow === room.goldRow);
@@ -1774,7 +1765,6 @@ saboIo.on('connection', (socket) => {
                                         if (isGold) {
                                             saboIo.to(roomCode).emit('actionAnnounce', { actionText: `🎉 ${player.name}님이 금덩이를 발견했습니다!` });
                                             
-                                            // 핸드에서 쓴 카드 버리기 및 보충
                                             let removedCount = 0;
                                             const idx = player.hand.findIndex(c => c.id === card.id);
                                             if (idx !== -1) { player.hand.splice(idx, 1); removedCount++; }
@@ -1782,7 +1772,6 @@ saboIo.on('connection', (socket) => {
                                                 if (room.deck && room.deck.length > 0) player.hand.push(room.deck.shift());
                                             }
 
-                                            // 금 발견시 4초 대기 페이즈 설정 후 라운드 종료
                                             room.phase = 'REVEALING_GOLD'; 
                                             clearSaboTimer(room);
                                             emitSaboUpdate(roomCode, room);
