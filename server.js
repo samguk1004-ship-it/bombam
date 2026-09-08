@@ -1654,15 +1654,21 @@ saboIo.on('connection', (socket) => {
                             }
                             actionText = `🪨 ${player.name}님이 낙석을 일으켰습니다!`;
                         } else if (d.includes('지도') || d.includes('도착') || d.includes('확인')) {
+                            // 지도 애니메이션 이벤트 전송 (나를 제외한 다른 플레이어들에게 덮기 애니메이션을 보여주기 위함)
+                            saboIo.to(roomCode).emit('mapCheckAnim', { col: slot.col, row: slot.row, actorId: player.id });
+                            
                             const isGold = (slot.row === room.goldRow);
                             saboIo.to(socket.id).emit('mapCheckResult', { row: slot.row, type: isGold ? 'gold' : 'coal' });
                             actionText = `🗺️ ${player.name}님이 지도를 은밀하게 확인했습니다.`;
                         } else if (card.type === 'path') {
+                            // 길 카드 설치 시 애니메이션 이벤트 전송
+                            saboIo.to(roomCode).emit('pathCardAnim', { col: slot.col, row: slot.row, imgCode: card.imgCode, isRotated: isRotated || false, actorId: player.id });
+                            
                             if (!room.board) room.board = [];
                             room.board.push({ id: card.id, type: card.type, desc: card.desc, imgCode: card.imgCode, col: slot.col, row: slot.row, isRotated: isRotated || false });
                             actionText = `${player.name}님이 길을 개척했습니다!`;
 
-                            // 목적지(10열)에 도달했는지 확인
+                            // 목적지 도달 확인 로직
                             const isNearDest = (slot.col === 9 && SABO_DEST_ROWS.includes(slot.row));
                             if (isNearDest || slot.col === 10) {
                                 const targetRow = slot.col === 10 ? slot.row : slot.row;
