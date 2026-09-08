@@ -1663,12 +1663,10 @@ saboIo.on('connection', (socket) => {
             let actionText = `${player.name}님이 카드를 사용했습니다.`;
 
             if (isDiscard) {
-                // 클라이언트에서 전달받은 discardIds(문자열 배열)를 바로 사용하여 삭제
                 let idsToRemove = discardIds || [];
                 if (idsToRemove.length === 0 && cards && Array.isArray(cards)) {
                     idsToRemove = cards.map(c => c.id);
-                }
-                if (idsToRemove.length === 0 && card && card.id) {
+                } else if (idsToRemove.length === 0 && card && card.id) {
                     idsToRemove = [card.id];
                 }
 
@@ -1682,7 +1680,7 @@ saboIo.on('connection', (socket) => {
                             newHand.push(c);
                         }
                     }
-                    player.hand = newHand; // 삭제 완료된 배열 교체
+                    player.hand = newHand; 
                     
                     for (let i = 0; i < removedCount; i++) {
                         if (room.deck && room.deck.length > 0) {
@@ -1750,48 +1748,95 @@ saboIo.on('connection', (socket) => {
                             saboIo.to(socket.id).emit('mapCheckResult', { row: slot.row, type: isGold ? 'gold' : 'coal' });
                             actionText = `🗺️ ${player.name}님이 지도를 은밀하게 확인했습니다.`;
                         } else if (card.type === 'path') {
-                            saboIo.to(roomCode).emit('pathCardAnim', { col: slot.col, row: slot.row, imgCode: card.imgCode, isRotated: isRotated || false, actorId: player.id });
+                            // [수정됨] 광부 애니메이션 이벤트 먼저 방송하고 1.5초 딜레이
+                            saboIo.to(roomCode).emit('minerAnim', { col: slot.col, row: slot.row, actorId: player.id });
                             
-                            if (!room.board) room.board = [];
-                            room.board.push({ id: card.id, type: card.type, desc: card.desc, imgCode: card.imgCode, col: slot.col, row: slot.row, isRotated: isRotated || false });
-                            actionText = `${player.name}님이 길을 개척했습니다!`;
+                            // 카드 미리 빼기 (연타 방지)
+                            let removedCount = 0;
+                            const idx = player.hand.findIndex(c => c.id === card.id);
+                            if (idx !== -1) { player.hand.splice(idx, 1); removedCount++; }
 
-                            for (const targetRow of SABO_DEST_ROWS) {
-                                if (!room.board.find(b => b.col === 10 && b.row === targetRow)) {
-                                    if (isDestConnectedToStart(room.board, 10, targetRow)) {
-                                        const isGold = (targetRow === room.goldRow);
-                                        room.board.push({ col: 10, row: targetRow, imgCode: isGold ? '01' : '02', isRotated: false });
-                                        
-                                        if (isGold) {
-                                            saboIo.to(roomCode).emit('actionAnnounce', { actionText: `🎉 ${player.name}님이 금덩이를 발견했습니다!` });
-                                            
-                                            let removedCount = 0;
-                                            const idx = player.hand.findIndex(c => c.id === card.id);
-                                            if (idx !== -1) { player.hand.splice(idx, 1); removedCount++; }
-                                            for (let i = 0; i < removedCount; i++) {
-                                                if (room.deck && room.deck.length > 0) player.hand.push(room.deck.shift());
-                                            }
+                            room.phase = 'ANIMATING_PATH';
+                            clearSaboTimer(room);
+                            emitSaboUpdate(roomCode, room);
 
-                                            room.phase = 'REVEALING_GOLD'; 
-                                            clearSaboTimer(room);
-                                            emitSaboUpdate(roomCode, room);
+                            setTimeout(() => {
+                                const curRoom = saboRooms[roomCode];
+                                if (!curRoom) return;
+                                
+                                curRoom.board.push({ id: card.id, type: card.type, desc: card.desc, imgCode: card.imgCode, col: slot.col, row: slot.row, isRotated: isRotated || false });
+                                let actionTextPath = `${player.name}님이 길을 개척했습니다!`;
+
+                                const placedEdges = getCardEdges(card.imgCode, isRotated);
+                                let triggeredRows = [];
+
+                                if (slot.col === 9 && placedEdges.right === 1 && SABO_DEST_ROWS.includes(slot.row)) {
+                                    triggeredRows.push(slot.row);
+                                }
+                                if (slot.col === 10 && placedEdges.top === 1 && SABO_DEST_ROWS.includes(slot.row - 1)) {
+                                    triggeredRows.push(slot.row - 1);
+                                }
+                                if (slot.col === 10 && placedEdges.bottom === 1 && SABO_DEST_ROWS.includes(slot.row + 1)) {
+                                    triggeredRows.push(slot.row + 1);
+                                }
+                                if (slot.col === 11 && placedEdges.left === 1 && SABO_DEST_ROWS.includes(slot.row)) {
+                                    triggeredRows.push(slot.row);
+                                }
+
+                                for (const targetRow of triggeredRows) {
+                                    if (!curRoom.board.find(b => b.col === 10 && b.row === targetRow)) {
+                                        if (isDestConnectedToStart(curRoom.board, 10, targetRow)) {
+                                            const isGold = (targetRow === curRoom.goldRow);
+                                            curRoom.board.push({ col: 10, row: targetRow, imgCode: isGold ? '01' : '02', isRotated: false });
                                             
-                                            setTimeout(() => {
-                                                const curRoom = saboRooms[roomCode];
-                                                if (curRoom && curRoom.phase === 'REVEALING_GOLD') {
-                                                    endSaboRound(curRoom, true);
-                                                    emitSaboUpdate(roomCode, curRoom);
+                                            if (isGold) {
+                                                saboIo.to(roomCode).emit('actionAnnounce', { actionText: `🎉 ${player.name}님이 금덩이를 발견했습니다!` });
+                                                
+                                                for (let i = 0; i < removedCount; i++) {
+                                                    if (curRoom.deck && curRoom.deck.length > 0) player.hand.push(curRoom.deck.shift());
                                                 }
-                                            }, 4000);
-                                            
-                                            return; 
-                                        } else {
-                                            actionText = `앗! 석탄이었습니다.`;
-                                            saboIo.to(roomCode).emit('mapCheckResult', { row: targetRow, type: 'coal' });
+
+                                                curRoom.phase = 'REVEALING_GOLD'; 
+                                                emitSaboUpdate(roomCode, curRoom);
+                                                
+                                                setTimeout(() => {
+                                                    const r2 = saboRooms[roomCode];
+                                                    if (r2 && r2.phase === 'REVEALING_GOLD') {
+                                                        endSaboRound(r2, true);
+                                                        emitSaboUpdate(roomCode, r2);
+                                                    }
+                                                }, 4000);
+                                                
+                                                return; 
+                                            } else {
+                                                actionTextPath = `앗! 석탄이었습니다.`;
+                                                saboIo.to(roomCode).emit('mapCheckResult', { row: targetRow, type: 'coal' });
+                                            }
                                         }
                                     }
                                 }
-                            }
+
+                                for (let i = 0; i < removedCount; i++) {
+                                    if (curRoom.deck && curRoom.deck.length > 0) player.hand.push(curRoom.deck.shift());
+                                }
+                                
+                                saboIo.to(roomCode).emit('actionAnnounce', { actionText: actionTextPath });
+
+                                if (checkSaboRoundEnd(curRoom)) return;
+
+                                let loopCount = 0;
+                                do {
+                                    curRoom.turnIndex = (curRoom.turnIndex + 1) % curRoom.players.length;
+                                    curRoom.turnId = curRoom.players[curRoom.turnIndex].id;
+                                    loopCount++;
+                                } while ((!curRoom.players[curRoom.turnIndex].hand || curRoom.players[curRoom.turnIndex].hand.length === 0) && loopCount < curRoom.players.length);
+                                
+                                curRoom.phase = 'GAME';
+                                startSaboTimer(curRoom, roomCode, 60);
+                                emitSaboUpdate(roomCode, curRoom);
+                            }, 1500); // 1.5초(GIF재생) 후 처리
+                            
+                            return; // 일반 루틴 스킵
                         }
                     }
                     
