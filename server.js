@@ -1270,7 +1270,6 @@ coupIo.on('connection', (socket) => {
     });
 });
 
-
 // ==========================================
 // ⛏️ [4] 사보타지 전용 (Namespace: /sabo)
 // ==========================================
@@ -1280,10 +1279,31 @@ const saboDisconnectTimers = {};
 
 const SABO_DEST_ROWS = [2, 4, 6];
 
+// 길 카드 연결 방향 정의 (상, 우, 하, 좌)
+const PATH_EDGES = {
+    '03': [1,0,1,0], '04': [0,1,0,1], '05': [1,1,0,0], '06': [1,0,0,1], '07': [1,1,1,0],
+    '08': [1,1,1,1], '09': [1,1,0,1],
+    '10': [1,1,1,1], '11': [1,0,1,1], '12': [1,1,0,1], 
+    '13': [0,0,1,1], '14': [0,1,0,1], '15': [0,1,1,0], 
+    '16': [1,0,1,0], '17': [0,0,1,0], '18': [0,0,0,1], 
+    '21': [1, 1, 1, 0], '22': [1, 1, 1, 0], 
+    '23': [1, 1, 1, 0], '24': [1, 1, 1, 1], 
+    '25': [1, 1, 1, 1], '26': [1, 1, 1, 1], 
+    '27': [1, 1, 1, 0], '28': [1, 1, 1, 1],
+    '29': [1,1,1,1], '31': [1,1,1,1], '32': [0,0,0,1], '33': [1, 1, 1, 1],  '34': [1, 1, 1, 1],
+    '35': [0,1,1,1], '36': [0, 0, 1, 0], '37': [1, 1, 1, 0], '38': [0, 1, 1, 1],
+    '41': [1, 1, 1, 0], '42': [0,1,0,1], '43': [0,1,1,0], '44': [0,1,0,1], '45': [1,0,1,0], '46': [0,0,1,0],
+    '47': [0,0,0,1], '48': [1,1,0,0], '49': [1,0,0,1], '50': [0,0,1,0]
+};
+
+function getCardEdges(imgCode, isRotated) {
+    let data = PATH_EDGES[imgCode] || [1,1,1,1];
+    if (isRotated) return { top: data[2], right: data[3], bottom: data[0], left: data[1] };
+    return { top: data[0], right: data[1], bottom: data[2], left: data[3] };
+}
+
 function emitSaboUpdate(roomCode, room) {
     const now = Date.now();
-    
-    // 숨길 정보(덱, 금 위치)를 제외한 안전본을 생성하여 클라이언트로 전송
     const safeRoom = { 
         ...room, 
         deckCount: room.deck ? room.deck.length : 0,
@@ -1294,7 +1314,6 @@ function emitSaboUpdate(roomCode, room) {
     };
     delete safeRoom.deck;
     delete safeRoom.goldRow;
-    
     saboIo.to(roomCode).emit('roomUpdate', safeRoom);
 }
 
@@ -1331,9 +1350,12 @@ function autoPlaySaboTurn(room, roomCode) {
             const randomIdx = Math.floor(Math.random() * player.hand.length);
             const discardCard = player.hand[randomIdx];
             
-            const beforeCount = player.hand.length;
-            player.hand = player.hand.filter(c => c.id !== discardCard.id);
-            const removedCount = beforeCount - player.hand.length;
+            let removedCount = 0;
+            const idx = player.hand.findIndex(c => c.id === discardCard.id);
+            if (idx !== -1) {
+                player.hand.splice(idx, 1);
+                removedCount++;
+            }
             for (let i = 0; i < removedCount; i++) {
                 if (room.deck && room.deck.length > 0) player.hand.push(room.deck.shift());
             }
@@ -1371,7 +1393,8 @@ function endSaboRound(room, isMinerWin) {
     room.phase = 'ROUND_END';
     
     room.players.forEach(p => {
-        const isPenalized = p.trapped || !p.tools.pickaxe || !p.tools.lantern || !p.tools.cart;
+        // [수정됨] 장비가 파손되어 있어도 보상을 받음 (감옥 상태일 때만 패널티 적용)
+        const isPenalized = p.trapped; 
         let earnedGold = 0;
         
         if (!isPenalized) {
@@ -1590,19 +1613,19 @@ saboIo.on('connection', (socket) => {
             let actionText = `${player.name}님이 카드를 사용했습니다.`;
 
             if (isDiscard) {
+                // [수정됨] 버리기가 확실히 실행되도록 ID 매칭 후 splice 처리 보강
                 const discardCards = cards || (card ? [card] : []);
-                if (discardCards.length > 0) {
-                    // ID를 기준으로 버려질 카드를 찾아서 삭제하고, 삭제한 개수만큼 덱에서 보충
-                    const discardIds = discardCards.map(c => c.id);
-                    const initialHandSize = player.hand.length;
-                    
-                    player.hand = player.hand.filter(c => !discardIds.includes(c.id));
-                    
-                    const removedCount = initialHandSize - player.hand.length;
-                    for (let i = 0; i < removedCount; i++) {
-                        if (room.deck && room.deck.length > 0) {
-                            player.hand.push(room.deck.shift());
+                if (discardCards && discardCards.length > 0) {
+                    let removedCount = 0;
+                    discardCards.forEach(dc => {
+                        const idx = player.hand.findIndex(c => c.id === dc.id);
+                        if (idx !== -1) {
+                            player.hand.splice(idx, 1);
+                            removedCount++;
                         }
+                    });
+                    for (let i = 0; i < removedCount; i++) {
+                        if (room.deck && room.deck.length > 0) player.hand.push(room.deck.shift());
                     }
                 }
                 actionText = `${player.name}님이 카드를 버렸습니다.`;
@@ -1613,6 +1636,7 @@ saboIo.on('connection', (socket) => {
                     const d = (card.desc || '').replace(/\s+/g, '');
 
                     if (target) {
+                        // 액션 대상 효과 명확한 분기 처리
                         if (d.includes('파괴') || d.includes('수리')) {
                             if (d.includes('파괴')) {
                                 if (equipType) target.tools[equipType] = false;
@@ -1634,7 +1658,7 @@ saboIo.on('connection', (socket) => {
                             actionText = `🔄 ${player.name}님이 ${target.name}의 직업을 바꿨습니다!`;
                         }
                         else if (d.includes('도둑방지') || d.includes('도둑막기') || d.includes('도둑잡기')) {
-                            if (target.thief) target.thief = false;
+                            target.thief = false;
                             actionText = `👮 ${target.name}의 도둑질이 차단되었습니다!`;
                         }
                         else if (d.includes('도둑')) {
@@ -1642,11 +1666,11 @@ saboIo.on('connection', (socket) => {
                             actionText = `🦹 ${player.name}님이 도둑질을 준비합니다.`;
                         }
                         else if (d.includes('감옥탈출') || d.includes('탈옥') || d.includes('감옥해방')) {
-                            if (target.trapped) target.trapped = false;
+                            target.trapped = false;
                             actionText = `🕊️ ${target.name}님이 감옥에서 풀려났습니다!`;
                         }
                         else if (d.includes('감옥') && !d.includes('탈출')) {
-                            if (!target.trapped) target.trapped = true;
+                            target.trapped = true;
                             actionText = `⛓️ ${target.name}님이 감옥에 갇혔습니다!`;
                         }
                     } else if (slot) {
@@ -1659,45 +1683,79 @@ saboIo.on('connection', (socket) => {
                             actionText = `🪨 ${player.name}님이 낙석을 일으켰습니다!`;
                         } else if (d.includes('지도') || d.includes('도착') || d.includes('확인')) {
                             saboIo.to(roomCode).emit('mapCheckAnim', { col: slot.col, row: slot.row, actorId: player.id });
-                            
                             const isGold = (slot.row === room.goldRow);
                             saboIo.to(socket.id).emit('mapCheckResult', { row: slot.row, type: isGold ? 'gold' : 'coal' });
                             actionText = `🗺️ ${player.name}님이 지도를 은밀하게 확인했습니다.`;
                         } else if (card.type === 'path') {
-                            // 길 카드 설치 시 애니메이션 이벤트 전송
                             saboIo.to(roomCode).emit('pathCardAnim', { col: slot.col, row: slot.row, imgCode: card.imgCode, isRotated: isRotated || false, actorId: player.id });
                             
                             if (!room.board) room.board = [];
                             room.board.push({ id: card.id, type: card.type, desc: card.desc, imgCode: card.imgCode, col: slot.col, row: slot.row, isRotated: isRotated || false });
                             actionText = `${player.name}님이 길을 개척했습니다!`;
 
-                            // 목적지 도달 확인 로직
-                            const isNearDest = (slot.col === 9 && SABO_DEST_ROWS.includes(slot.row));
-                            if (isNearDest || slot.col === 10) {
-                                const targetRow = slot.col === 10 ? slot.row : slot.row;
-                                if (SABO_DEST_ROWS.includes(targetRow)) {
-                                    if (!room.board.find(b => b.col === 10 && b.row === targetRow)) {
-                                        const isGold = (targetRow === room.goldRow);
-                                        room.board.push({ col: 10, row: targetRow, imgCode: isGold ? '01' : '02', isRotated: false });
+                            // [수정됨] 목적지 도달 시 연결 방향 엄격히 확인
+                            const placedEdges = getCardEdges(card.imgCode, isRotated);
+                            let triggeredRows = [];
+
+                            if (slot.col === 9 && placedEdges.right === 1 && SABO_DEST_ROWS.includes(slot.row)) {
+                                triggeredRows.push(slot.row);
+                            }
+                            if (slot.col === 10 && placedEdges.top === 1 && SABO_DEST_ROWS.includes(slot.row - 1)) {
+                                triggeredRows.push(slot.row - 1);
+                            }
+                            if (slot.col === 10 && placedEdges.bottom === 1 && SABO_DEST_ROWS.includes(slot.row + 1)) {
+                                triggeredRows.push(slot.row + 1);
+                            }
+                            if (slot.col === 11 && placedEdges.left === 1 && SABO_DEST_ROWS.includes(slot.row)) {
+                                triggeredRows.push(slot.row);
+                            }
+
+                            for (const targetRow of triggeredRows) {
+                                if (!room.board.find(b => b.col === 10 && b.row === targetRow)) {
+                                    const isGold = (targetRow === room.goldRow);
+                                    room.board.push({ col: 10, row: targetRow, imgCode: isGold ? '01' : '02', isRotated: false });
+                                    
+                                    if (isGold) {
+                                        saboIo.to(roomCode).emit('actionAnnounce', { actionText: `🎉 ${player.name}님이 금덩이를 발견했습니다!` });
                                         
-                                        if (isGold) {
-                                            saboIo.to(roomCode).emit('actionAnnounce', { actionText: `🎉 ${player.name}님이 금덩이를 발견했습니다!` });
-                                            player.hand = player.hand.filter(c => c.id !== card.id);
-                                            endSaboRound(room, true);
-                                            emitSaboUpdate(roomCode, room);
-                                            return;
-                                        } else {
-                                            actionText = `앗! 석탄이었습니다.`;
+                                        // 핸드에서 쓴 카드 버리기 및 보충
+                                        let removedCount = 0;
+                                        const idx = player.hand.findIndex(c => c.id === card.id);
+                                        if (idx !== -1) { player.hand.splice(idx, 1); removedCount++; }
+                                        for (let i = 0; i < removedCount; i++) {
+                                            if (room.deck && room.deck.length > 0) player.hand.push(room.deck.shift());
                                         }
+
+                                        // [수정됨] 금 발견시 4초 대기 페이즈 설정 후 라운드 종료
+                                        room.phase = 'REVEALING_GOLD'; 
+                                        clearSaboTimer(room);
+                                        emitSaboUpdate(roomCode, room);
+                                        
+                                        setTimeout(() => {
+                                            const curRoom = saboRooms[roomCode];
+                                            if (curRoom && curRoom.phase === 'REVEALING_GOLD') {
+                                                endSaboRound(curRoom, true);
+                                                emitSaboUpdate(roomCode, curRoom);
+                                            }
+                                        }, 4000);
+                                        
+                                        return; // 일반 턴 루틴 건너뜀
+                                    } else {
+                                        actionText = `앗! 석탄이었습니다.`;
+                                        saboIo.to(roomCode).emit('mapCheckResult', { row: targetRow, type: 'coal' });
                                     }
                                 }
                             }
                         }
                     }
                     
-                    const beforeCount = player.hand.length;
-                    player.hand = player.hand.filter(c => c.id !== card.id);
-                    const removedCount = beforeCount - player.hand.length;
+                    // 패스된 행동 카드 / 빗나간 길 연결 등 일반적인 처리 후 덱 보충
+                    let removedCount = 0;
+                    const idx = player.hand.findIndex(c => c.id === card.id);
+                    if (idx !== -1) {
+                        player.hand.splice(idx, 1);
+                        removedCount++;
+                    }
                     for (let i = 0; i < removedCount; i++) {
                         if (room.deck && room.deck.length > 0) player.hand.push(room.deck.shift());
                     }
@@ -1720,7 +1778,7 @@ saboIo.on('connection', (socket) => {
             startSaboTimer(room, roomCode, 60);
             emitSaboUpdate(roomCode, room);
 
-        } catch(e) {}
+        } catch(e) { console.error(e); }
     });
 
     socket.on('leaveRoom', (roomCode) => {
