@@ -1280,7 +1280,7 @@ const saboDisconnectTimers = {};
 
 const SABO_DEST_ROWS = [2, 4, 6];
 
-// [수정됨] 길 카드 연결 방향 정의 (상, 우, 하, 좌) - 서버측 목적지 연결 검사용
+// 길 카드 연결 방향 정의 (상, 우, 하, 좌)
 const PATH_EDGES = {
     '03': [1,0,1,0], '04': [0,1,0,1], '05': [1,1,0,0], '06': [1,0,0,1], '07': [1,1,1,0],
     '08': [1,1,1,1], '09': [1,1,0,1],
@@ -1297,14 +1297,12 @@ const PATH_EDGES = {
     '47': [0,0,0,1], '48': [1,1,0,0], '49': [1,0,0,1], '50': [0,0,1,0]
 };
 
-// [수정됨] 서버측 경로 확인을 위해 단순화된 엣지 반환기
 function getCardEdges(imgCode, isRotated) {
     let data = PATH_EDGES[imgCode] || [1,1,1,1];
     if (isRotated) return { top: data[2], right: data[3], bottom: data[0], left: data[1] };
     return { top: data[0], right: data[1], bottom: data[2], left: data[3] };
 }
 
-// [추가됨] 시작점(2,4)에서 특정 목적지까지 길이 정상적으로 이어져있는지 검사하는 BFS 알고리즘
 function isDestConnectedToStart(board, destCol, destRow) {
     const occupied = new Map();
     occupied.set('2,4', { top: 1, right: 1, bottom: 1, left: 1 });
@@ -1332,12 +1330,10 @@ function isDestConnectedToStart(board, destCol, destRow) {
         const currentCard = occupied.get(`${col},${row}`);
         
         for (const dir of DIR_OFFSETS) {
-            // 현재 카드의 해당 방향이 뚫려있을 때만 진행
             if (currentCard[dir.outDir] === 1) {
                 const nc = col + dir.dc; 
                 const nr = row + dir.dr;
                 
-                // 타겟 목적지에 닿았는지 확인
                 if (nc === destCol && nr === destRow) {
                     return true;
                 }
@@ -1345,7 +1341,6 @@ function isDestConnectedToStart(board, destCol, destRow) {
                 const nextKey = `${nc},${nr}`;
                 if (!visited.has(nextKey)) {
                     const nextCard = occupied.get(nextKey);
-                    // 다음 카드가 존재하고, 이어지는 방향이 뚫려있는지 검사
                     if (nextCard && nextCard[dir.inDir] === 1) {
                         visited.add(nextKey);
                         queue.push({ col: nc, row: nr });
@@ -1448,7 +1443,7 @@ function endSaboRound(room, isMinerWin) {
     room.phase = 'ROUND_END';
     
     room.players.forEach(p => {
-        // [수정됨] 장비가 파손되어 있어도 보상은 획득 (오직 감옥(trapped) 상태일 때만 보상 제외)
+        // 장비 파손과 무관하게 감옥 상태일때만 패널티
         const isPenalized = p.trapped; 
         let earnedGold = 0;
         
@@ -1467,7 +1462,7 @@ function endSaboRound(room, isMinerWin) {
         p.gold = (p.gold || 0) + earnedGold;
     });
 
-    // [수정됨] 도둑 스틸 로직 자동 진행으로 복구 (단, 감옥에 있을 땐 도둑질도 불가)
+    // 도둑 로직 자동 진행 복원 (감옥이면 제외)
     room.players.forEach(p => {
         if (p.thief && !p.trapped) {
             const targets = room.players.filter(t => t.id !== p.id && t.gold > 0);
@@ -1503,6 +1498,7 @@ function startSaboRound(room) {
         p.hand = [];
         p.tools = { pickaxe: true, lantern: true, cart: true };
         p.thief = false;
+        p.hasStolen = false; 
         p.trapped = false;
         
         for (let i = 0; i < handSize; i++) {
@@ -1605,7 +1601,7 @@ saboIo.on('connection', (socket) => {
                 room.players.push({
                     id: socket.id, name: userName, userId, isBot, ready: room.players.length === 0, 
                     gold: 0, tools: { pickaxe: true, lantern: true, cart: true }, thief: false, trapped: false,
-                    hand: [], connected: true, isSpectator
+                    hasStolen: false, hand: [], connected: true, isSpectator
                 });
             } else {
                 existingPlayer.id = socket.id;
@@ -1669,15 +1665,24 @@ saboIo.on('connection', (socket) => {
             let actionText = `${player.name}님이 카드를 사용했습니다.`;
 
             if (isDiscard) {
-                // [수정됨] 카드 버리기 로직 강화: 버릴 카드의 ID를 배열로 만들고 필터링하여 버림. 지워진 개수만큼 정확히 덱에서 보충함.
-                const discardIds = cards ? cards.map(c => c.id) : (card ? [card.id] : []);
+                // [수정됨] 카드 버리기 로직 강화: 버릴 카드의 ID를 배열로 만들고 필터링하여 버림.
+                let discardIds = [];
+                if (cards && Array.isArray(cards)) {
+                    discardIds = cards.map(c => c.id);
+                } else if (card && card.id) {
+                    discardIds = [card.id];
+                }
+
                 if (discardIds.length > 0) {
                     const initialLen = player.hand.length;
                     player.hand = player.hand.filter(c => !discardIds.includes(c.id));
                     const removedCount = initialLen - player.hand.length;
                     
+                    // 버려진 카드 수만큼 덱에서 보충
                     for (let i = 0; i < removedCount; i++) {
-                        if (room.deck && room.deck.length > 0) player.hand.push(room.deck.shift());
+                        if (room.deck && room.deck.length > 0) {
+                            player.hand.push(room.deck.shift());
+                        }
                     }
                 }
                 actionText = `${player.name}님이 카드를 버렸습니다.`;
@@ -1744,11 +1749,7 @@ saboIo.on('connection', (socket) => {
                             room.board.push({ id: card.id, type: card.type, desc: card.desc, imgCode: card.imgCode, col: slot.col, row: slot.row, isRotated: isRotated || false });
                             actionText = `${player.name}님이 길을 개척했습니다!`;
 
-                            // [수정됨] 목적지 연결 알고리즘 전면 교체 (막힌 길 연결 버그 차단)
-                            // 이제 바로 옆에 카드를 붙인다고 트리거 되는 것이 아니라, 
-                            // 2,4(출발점) 부터 현재 모든 보드카드의 열린 방향을 따라가서 목적지에 도달하는지 BFS 탐색을 돌립니다.
                             for (const targetRow of SABO_DEST_ROWS) {
-                                // 목적지가 아직 안열렸을 때만 검사
                                 if (!room.board.find(b => b.col === 10 && b.row === targetRow)) {
                                     if (isDestConnectedToStart(room.board, 10, targetRow)) {
                                         const isGold = (targetRow === room.goldRow);
@@ -1764,7 +1765,6 @@ saboIo.on('connection', (socket) => {
                                                 if (room.deck && room.deck.length > 0) player.hand.push(room.deck.shift());
                                             }
 
-                                            // [수정됨] 금 발견 시 바로 종료하지 않고 4초간 화면 멈춤 유지 (모두에게 보여주기)
                                             room.phase = 'REVEALING_GOLD'; 
                                             clearSaboTimer(room);
                                             emitSaboUpdate(roomCode, room);
@@ -1777,7 +1777,7 @@ saboIo.on('connection', (socket) => {
                                                 }
                                             }, 4000);
                                             
-                                            return; // 일반 턴 루틴 건너뜀
+                                            return; 
                                         } else {
                                             actionText = `앗! 석탄이었습니다.`;
                                             saboIo.to(roomCode).emit('mapCheckResult', { row: targetRow, type: 'coal' });
