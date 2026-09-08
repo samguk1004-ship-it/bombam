@@ -1654,7 +1654,7 @@ saboIo.on('connection', (socket) => {
                             }
                             actionText = `🪨 ${player.name}님이 낙석을 일으켰습니다!`;
                         } else if (d.includes('지도') || d.includes('도착') || d.includes('확인')) {
-                            // 지도 애니메이션 이벤트 전송 (나를 제외한 다른 플레이어들에게 덮기 애니메이션을 보여주기 위함)
+                            // 지도 덮기 애니메이션을 방 전체에 브로드캐스트 (클라이언트에서 본인/타인 분기하여 처리)
                             saboIo.to(roomCode).emit('mapCheckAnim', { col: slot.col, row: slot.row, actorId: player.id });
                             
                             const isGold = (slot.row === room.goldRow);
