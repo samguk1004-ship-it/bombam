@@ -1280,7 +1280,6 @@ const saboDisconnectTimers = {};
 
 const SABO_DEST_ROWS = [2, 4, 6];
 
-// 길 카드 연결 방향 정의 (상, 우, 하, 좌)
 const PATH_EDGES = {
     '03': [1,0,1,0], '04': [0,1,0,1], '05': [1,1,0,0], '06': [1,0,0,1], '07': [1,1,1,0],
     '08': [1,1,1,1], '09': [1,1,0,1],
@@ -1598,13 +1597,13 @@ function createSaboDeck() {
 saboIo.on('connection', (socket) => {
     socket.on('pingHeartbeat', () => { socket.emit('pongHeartbeat'); });
     
-    // [추가] 클라이언트에서 지도 확인 완료 버튼을 눌렀을 때, 모든 클라이언트에 신호를 보내 카드를 치우고 턴을 넘깁니다.
+    // [추가] 클라이언트에서 지도 확인 완료 버튼을 눌렀을 때의 동기화 중계 로직
     socket.on('mapCheckDone', ({ roomCode, row }) => {
         try {
             const room = saboRooms[roomCode];
             if (!room) return;
 
-            // 본인을 포함해 방에 있는 모든 사람에게 맵 덮개를 치우라는 신호 전송
+            // [동기화] 방 안의 모든 사람에게 맵 덮개를 치우라는 신호 전송 (타 플레이어 화면에서도 사라짐)
             saboIo.to(roomCode).emit('mapCheckDone', { row });
 
             if (room.phase === 'WAIT_MAP_CONFIRM' && room.mapCheckData && room.mapCheckData.actorId === socket.id) {
@@ -1617,6 +1616,7 @@ saboIo.on('connection', (socket) => {
 
                 if (checkSaboRoundEnd(room)) return;
 
+                // 다음 턴으로 넘기기
                 let loopCount = 0;
                 do {
                     room.turnIndex = (room.turnIndex + 1) % room.players.length;
@@ -1718,7 +1718,7 @@ saboIo.on('connection', (socket) => {
             let actionText = `${player.name}님이 카드를 사용했습니다.`;
 
             if (isDiscard) {
-                // [수정] 카드 버리기 로직 최적화 및 캔슬 버그 해결
+                // [수정] 카드 버리기 로직 최적화 및 캔슬 버그 완전 해결
                 let idsToRemove = [];
                 if (discardIds && Array.isArray(discardIds) && discardIds.length > 0) {
                     idsToRemove = discardIds;
@@ -1832,10 +1832,12 @@ saboIo.on('connection', (socket) => {
                             
                             saboIo.to(roomCode).emit('actionAnnounce', { actionText });
 
+                            // 턴을 넘기지 않고 대기 상태로 변경
                             room.phase = 'WAIT_MAP_CONFIRM';
                             room.mapCheckData = { actorId: player.id, row: slot.row };
                             
                             if (player.isBot) {
+                                // 봇인 경우 3초 뒤 스스로 확인 버튼을 누른 것처럼 처리
                                 setTimeout(() => {
                                     const r = saboRooms[roomCode];
                                     if (r && r.phase === 'WAIT_MAP_CONFIRM' && r.mapCheckData?.actorId === player.id) {
@@ -1855,10 +1857,11 @@ saboIo.on('connection', (socket) => {
                                     }
                                 }, 3000);
                             } else {
+                                // 실제 유저인 경우 무한정 멈추지 않도록 15초 타이머 부여
                                 startSaboTimer(room, roomCode, 15); 
                             }
                             emitSaboUpdate(roomCode, room);
-                            return; 
+                            return; // 턴을 여기서 끝내지 않고 함수를 빠져나갑니다.
                             
                         } else if (card.type === 'path') {
                             saboIo.to(roomCode).emit('pathCardAnim', { col: slot.col, row: slot.row, imgCode: card.imgCode, isRotated: isRotated || false, actorId: player.id });
@@ -1876,6 +1879,7 @@ saboIo.on('connection', (socket) => {
                                         if (isGold) {
                                             saboIo.to(roomCode).emit('actionAnnounce', { actionText: `🎉 ${player.name}님이 금덩이를 발견했습니다!` });
                                             
+                                            // 핸드에서 쓴 카드 버리기 및 보충
                                             let removedCount = 0;
                                             const idx = player.hand.findIndex(c => c.id === card.id);
                                             if (idx !== -1) { player.hand.splice(idx, 1); removedCount++; }
@@ -1944,6 +1948,7 @@ saboIo.on('connection', (socket) => {
             
             const wasTheirTurn = room.turnId === socket.id;
             
+            // [추가] 지도 확인 중에 퇴장해버리면 무한정 멈추는 것 방지
             if (room.phase === 'WAIT_MAP_CONFIRM' && room.mapCheckData?.actorId === socket.id) {
                 room.phase = 'GAME';
                 saboIo.to(roomCode).emit('mapCheckDone', { row: room.mapCheckData.row });
@@ -1994,6 +1999,7 @@ saboIo.on('connection', (socket) => {
                             delete saboDisconnectTimers[disconnectKey]; const currentRoom = saboRooms[roomCode]; if (!currentRoom) return;
                             const wasTheirTurn = currentRoom.turnId === player.id; currentRoom.players = currentRoom.players.filter(p => p.userId !== player.userId);
                             
+                            // [추가] 지도 확인 중에 퇴장해버리면 무한정 멈추는 것 방지
                             if (currentRoom.phase === 'WAIT_MAP_CONFIRM' && currentRoom.mapCheckData?.actorId === player.id) {
                                 currentRoom.phase = 'GAME';
                                 saboIo.to(roomCode).emit('mapCheckDone', { row: currentRoom.mapCheckData.row });
