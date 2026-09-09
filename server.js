@@ -1395,7 +1395,7 @@ function startSaboTimer(room, roomCode, durationSec) {
 function autoPlaySaboTurn(room, roomCode) {
     if (room.phase === 'WAIT_MAP_CONFIRM') {
         room.phase = 'GAME';
-        const player = room.players.find(p => p.id === room.mapCheckData.actorId);
+        const player = room.players.find(p => p.id === room.mapCheckData.actorId || p.userId === room.mapCheckData.actorId);
         if (player) {
             saboIo.to(roomCode).emit('actionAnnounce', { actionText: `시간 초과! 🗺️ ${player.name}님의 지도 확인이 강제로 종료됩니다.` });
         }
@@ -1597,6 +1597,7 @@ function createSaboDeck() {
 saboIo.on('connection', (socket) => {
     socket.on('pingHeartbeat', () => { socket.emit('pongHeartbeat'); });
     
+    // 타 플레이어의 화면에서도 즉각 덮어지도록 하는 이벤트
     socket.on('mapCheckDone', ({ roomCode, row }) => {
         try {
             const room = saboRooms[roomCode];
@@ -1604,9 +1605,11 @@ saboIo.on('connection', (socket) => {
 
             saboIo.to(roomCode).emit('mapCheckDone', { row });
 
-            if (room.phase === 'WAIT_MAP_CONFIRM' && room.mapCheckData && room.mapCheckData.actorId === socket.id) {
+            const player = room.players.find(p => p.id === socket.id || p.userId === socket.id);
+            const isMapActor = room.mapCheckData && (room.mapCheckData.actorId === socket.id || (player && room.mapCheckData.actorId === player.id));
+
+            if (room.phase === 'WAIT_MAP_CONFIRM' && room.mapCheckData && isMapActor) {
                 room.phase = 'GAME';
-                const player = room.players.find(p => p.id === socket.id);
                 if (player) {
                     saboIo.to(roomCode).emit('actionAnnounce', { actionText: `🗺️ ${player.name}님이 지도 확인을 완료했습니다.` });
                 }
@@ -1654,6 +1657,9 @@ saboIo.on('connection', (socket) => {
                     hasStolen: false, hand: [], connected: true, isSpectator
                 });
             } else {
+                if (room.mapCheckData && room.mapCheckData.actorId === existingPlayer.id) {
+                    room.mapCheckData.actorId = socket.id;
+                }
                 existingPlayer.id = socket.id;
                 existingPlayer.connected = true;
             }
