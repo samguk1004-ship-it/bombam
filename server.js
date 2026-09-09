@@ -1283,28 +1283,44 @@ const SABO_DEST_ROWS = [2, 4, 6];
 const PATH_EDGES = {
     '03': [1,0,1,0], '04': [0,1,0,1], '05': [1,1,0,0], '06': [1,0,0,1], '07': [1,1,1,0],
     '08': [1,1,1,1], '09': [1,1,0,1],
-    '10': [1,1,1,1], '11': [1,0,1,1], '12': [1,1,0,1], 
-    '13': [0,0,1,1], '14': [0,1,0,1], '15': [0,1,1,0], 
-    '16': [1,0,1,0], '17': [0,0,1,0], '18': [0,0,0,1], 
-    '21': [1, 1, 1, 0], '22': [1, 1, 1, 0], 
-    '23': [1, 1, 1, 0], '24': [1, 1, 1, 1], 
-    '25': [1, 1, 1, 1], '26': [1, 1, 1, 1], 
-    '27': [1, 1, 1, 0], '28': [1, 1, 1, 1],
-    '29': [1,1,1,1], '31': [1,1,1,1], '32': [0,0,0,1], '33': [1, 1, 1, 1],  '34': [1, 1, 1, 1],
-    '35': [0,1,1,1], '36': [0, 0, 1, 0], '37': [1, 1, 1, 0], '38': [0, 1, 1, 1],
-    '41': [1, 1, 1, 0], '42': [0,1,0,1], '43': [0,1,1,0], '44': [0,1,0,1], '45': [1,0,1,0], '46': [0,0,1,0],
+    '10': { edges: [1,1,1,1], links: [] }, '11': { edges: [1,0,1,1], links: [] }, '12': { edges: [1,1,0,1], links: [] }, 
+    '13': { edges: [0,0,1,1], links: [] }, '14': { edges: [0,1,0,1], links: [] }, '15': { edges: [0,1,1,0], links: [] }, 
+    '16': { edges: [1,0,1,0], links: [] }, '17': { edges: [0,0,1,0], links: [] }, '18': { edges: [0,0,0,1], links: [] }, 
+    '21': { edges: [1, 1, 1, 0], links: [[1, 2]] }, '22': { edges: [1, 1, 1, 0], links: [[0,2]] }, 
+    '23': { edges: [1, 1, 1, 0], links: [[1,2]] }, '24': { edges: [1, 1, 1, 1], links: [[0,2]] }, 
+    '25': { edges: [1, 1, 1, 1], links: [[1,3]] }, '26': { edges: [1, 1, 1, 1], links: [[0,3], [1,2]] }, 
+    '27': { edges: [1, 1, 1, 0], links: [[0,1]] }, '28': { edges: [1, 1, 1, 1], links: [[0,1], [2,3]] },
+    '29': { edges: [1, 1, 1, 1], links: [[0, 2], [1, 3]] }, // <-- 29번 터널 로직 분리 적용
+    '31': [1,1,1,1], '32': { edges: [0,0,0,1], links: [] }, '33': { edges: [1, 1, 1, 1], links: [[1, 2, 3]] },  '34': { edges: [1, 1, 1, 1], links: [[0, 2, 3]] },
+    '35': [0,1,1,1], '36': { edges: [0, 0, 1, 0], links: [] }, '37': { edges: [1, 1, 1, 0], links: [[0, 1, 2]] }, '38': { edges: [0, 1, 1, 1], links: [[1, 3]] },
+    '41': { edges: [1, 1, 1, 0], links: [[0, 2]] }, '42': [0,1,0,1], '43': [0,1,1,0], '44': [0,1,0,1], '45': [1,0,1,0], '46': [0,0,1,0],
     '47': [0,0,0,1], '48': [1,1,0,0], '49': [1,0,0,1], '50': [0,0,1,0]
 };
 
 function getCardEdges(imgCode, isRotated) {
-    let data = PATH_EDGES[imgCode] || [1,1,1,1];
-    if (isRotated) return { top: data[2], right: data[3], bottom: data[0], left: data[1] };
-    return { top: data[0], right: data[1], bottom: data[2], left: data[3] };
+    const data = PATH_EDGES[imgCode] || [1,1,1,1];
+    const baseEdges = Array.isArray(data) ? data : data.edges;
+    const links = Array.isArray(data) ? null : data.links;
+    let top, right, bottom, left;
+    
+    if (isRotated) { top = baseEdges[2]; right = baseEdges[3]; bottom = baseEdges[0]; left = baseEdges[1]; } 
+    else { top = baseEdges[0]; right = baseEdges[1]; bottom = baseEdges[2]; left = baseEdges[3]; }
+    
+    let internalLinks = [];
+    if (links) { 
+        internalLinks = links.map(group => group.map(dir => isRotated ? (dir + 2) % 4 : dir)); 
+    } else {
+        const allConnected = [];
+        if (top === 1) allConnected.push(0); if (right === 1) allConnected.push(1);
+        if (bottom === 1) allConnected.push(2); if (left === 1) allConnected.push(3);
+        internalLinks = [allConnected];
+    }
+    return { top, right, bottom, left, internalLinks };
 }
 
 function isDestConnectedToStart(board, destCol, destRow) {
     const occupied = new Map();
-    occupied.set('2,4', { top: 1, right: 1, bottom: 1, left: 1 });
+    occupied.set('2,4', { top: 1, right: 1, bottom: 1, left: 1, internalLinks: [[0,1,2,3]] });
     
     board.forEach(c => { 
         if (c.col !== 10 || !SABO_DEST_ROWS.includes(c.row)) {
@@ -1312,37 +1328,54 @@ function isDestConnectedToStart(board, destCol, destRow) {
         }
     });
 
-    const visited = new Set();
+    const connectedPorts = new Set();
     const queue = [];
-    queue.push({ col: 2, row: 4 });
-    visited.add('2,4');
+    
+    [0, 1, 2, 3].forEach(d => {
+        connectedPorts.add(`2,4,${d}`);
+        queue.push({ col: 2, row: 4, outDir: d });
+    });
 
     const DIR_OFFSETS = [ 
-        { dc: 0, dr: -1, outDir: 'top', inDir: 'bottom' }, 
-        { dc: 1, dr: 0, outDir: 'right', inDir: 'left' }, 
-        { dc: 0, dr: 1, outDir: 'bottom', inDir: 'top' }, 
-        { dc: -1, dr: 0, outDir: 'left', inDir: 'right' } 
+        { dc: 0, dr: -1, opp: 2, name: 'top' }, 
+        { dc: 1, dr: 0, opp: 3, name: 'right' }, 
+        { dc: 0, dr: 1, opp: 0, name: 'bottom' }, 
+        { dc: -1, dr: 0, opp: 1, name: 'left' } 
     ];
 
     while(queue.length > 0) {
-        const { col, row } = queue.shift();
-        const currentCard = occupied.get(`${col},${row}`);
+        const { col, row, outDir } = queue.shift();
+        const offset = DIR_OFFSETS[outDir];
+        const nc = col + offset.dc; 
+        const nr = row + offset.dr;
         
-        for (const dir of DIR_OFFSETS) {
-            if (currentCard[dir.outDir] === 1) {
-                const nc = col + dir.dc; 
-                const nr = row + dir.dr;
-                
-                if (nc === destCol && nr === destRow) {
-                    return true;
-                }
+        if (nc === destCol && nr === destRow) {
+            return true;
+        }
 
-                const nextKey = `${nc},${nr}`;
-                if (!visited.has(nextKey)) {
-                    const nextCard = occupied.get(nextKey);
-                    if (nextCard && nextCard[dir.inDir] === 1) {
-                        visited.add(nextKey);
-                        queue.push({ col: nc, row: nr });
+        const nextKey = `${nc},${nr}`;
+        const nextNode = occupied.get(nextKey);
+        
+        if (nextNode && !nextNode.isDest) {
+            const inDir = offset.opp;
+            const inDirName = DIR_OFFSETS[inDir].name;
+            
+            if (nextNode[inDirName] === 1) {
+                const inPort = `${nextKey},${inDir}`;
+                if (!connectedPorts.has(inPort)) {
+                    connectedPorts.add(inPort);
+                    
+                    const links = nextNode.internalLinks || [];
+                    const myGroup = links.find(group => group.includes(inDir));
+                    
+                    if (myGroup) {
+                        myGroup.forEach(outD => {
+                            const outPort = `${nextKey},${outD}`;
+                            if (!connectedPorts.has(outPort)) {
+                                connectedPorts.add(outPort);
+                                queue.push({ col: nc, row: nr, outDir: outD });
+                            }
+                        });
                     }
                 }
             }
