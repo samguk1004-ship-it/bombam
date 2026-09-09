@@ -1280,6 +1280,7 @@ const saboDisconnectTimers = {};
 
 const SABO_DEST_ROWS = [2, 4, 6];
 
+// [수정됨] 29번 터널 카드 및 링크 구조 분리 적용
 const PATH_EDGES = {
     '03': [1,0,1,0], '04': [0,1,0,1], '05': [1,1,0,0], '06': [1,0,0,1], '07': [1,1,1,0],
     '08': [1,1,1,1], '09': [1,1,0,1],
@@ -1290,13 +1291,14 @@ const PATH_EDGES = {
     '23': { edges: [1, 1, 1, 0], links: [[1,2]] }, '24': { edges: [1, 1, 1, 1], links: [[0,2]] }, 
     '25': { edges: [1, 1, 1, 1], links: [[1,3]] }, '26': { edges: [1, 1, 1, 1], links: [[0,3], [1,2]] }, 
     '27': { edges: [1, 1, 1, 0], links: [[0,1]] }, '28': { edges: [1, 1, 1, 1], links: [[0,1], [2,3]] },
-    '29': { edges: [1, 1, 1, 1], links: [[0, 2], [1, 3]] }, // <-- 29번 터널 로직 분리 적용
+    '29': { edges: [1, 1, 1, 1], links: [[0, 2], [1, 3]] }, 
     '31': [1,1,1,1], '32': { edges: [0,0,0,1], links: [] }, '33': { edges: [1, 1, 1, 1], links: [[1, 2, 3]] },  '34': { edges: [1, 1, 1, 1], links: [[0, 2, 3]] },
     '35': [0,1,1,1], '36': { edges: [0, 0, 1, 0], links: [] }, '37': { edges: [1, 1, 1, 0], links: [[0, 1, 2]] }, '38': { edges: [0, 1, 1, 1], links: [[1, 3]] },
     '41': { edges: [1, 1, 1, 0], links: [[0, 2]] }, '42': [0,1,0,1], '43': [0,1,1,0], '44': [0,1,0,1], '45': [1,0,1,0], '46': [0,0,1,0],
     '47': [0,0,0,1], '48': [1,1,0,0], '49': [1,0,0,1], '50': [0,0,1,0]
 };
 
+// [수정됨] 회전 시 링크 연결점 대응 기능 추가
 function getCardEdges(imgCode, isRotated) {
     const data = PATH_EDGES[imgCode] || [1,1,1,1];
     const baseEdges = Array.isArray(data) ? data : data.edges;
@@ -1318,6 +1320,7 @@ function getCardEdges(imgCode, isRotated) {
     return { top, right, bottom, left, internalLinks };
 }
 
+// [수정됨] 29번 터널 카드의 분리된 길을 감지하도록 BFS 로직 업그레이드
 function isDestConnectedToStart(board, destCol, destRow) {
     const occupied = new Map();
     occupied.set('2,4', { top: 1, right: 1, bottom: 1, left: 1, internalLinks: [[0,1,2,3]] });
@@ -1494,6 +1497,54 @@ function checkSaboRoundEnd(room) {
     return false;
 }
 
+// ==========================================
+// [추가] 도둑 순번(Queue) 처리 함수
+// ==========================================
+function processThiefQueue(room, roomCode) {
+    if (!room.thiefQueue || room.thiefQueue.length === 0) {
+        room.currentThiefId = null; // 도둑 차례 종료
+        emitSaboUpdate(roomCode, room);
+        return;
+    }
+
+    room.currentThiefId = room.thiefQueue[0];
+    const currentThief = room.players.find(p => p.id === room.currentThiefId);
+    
+    if (!currentThief || !currentThief.thief) {
+        room.thiefQueue.shift();
+        processThiefQueue(room, roomCode);
+        return;
+    }
+
+    const validTargets = room.players.filter(p => p.id !== currentThief.id && p.gold > 0);
+    
+    if (validTargets.length === 0) {
+        currentThief.thief = false;
+        room.thiefQueue.shift();
+        processThiefQueue(room, roomCode);
+        return;
+    }
+
+    if (currentThief.isBot) {
+        const target = validTargets[Math.floor(Math.random() * validTargets.length)];
+        target.gold -= 1;
+        currentThief.gold = (currentThief.gold || 0) + 1;
+        currentThief.thief = false;
+        
+        saboIo.to(roomCode).emit('actionAnnounce', {
+            actionText: `🦹 ${currentThief.name}님이 ${target.name}님의 금을 훔쳤습니다!`
+        });
+        
+        room.thiefQueue.shift();
+        setTimeout(() => {
+            processThiefQueue(room, roomCode);
+        }, 1500); 
+        emitSaboUpdate(roomCode, room); 
+    } else {
+        emitSaboUpdate(roomCode, room);
+    }
+}
+
 function endSaboRound(room, isMinerWin) {
     room.phase = 'ROUND_END';
     
@@ -1515,6 +1566,11 @@ function endSaboRound(room, isMinerWin) {
         
         p.gold = (p.gold || 0) + earnedGold;
     });
+
+    // [추가] 정산 후 도둑 큐 생성 및 실행
+    const thieves = room.players.filter(p => p.thief);
+    room.thiefQueue = thieves.map(t => t.id);
+    processThiefQueue(room, room.roomCode);
 }
 
 function startSaboRound(room) {
@@ -1540,7 +1596,6 @@ function startSaboRound(room) {
         p.hand = [];
         p.tools = { pickaxe: true, lantern: true, cart: true };
         p.thief = false;
-        p.hasStolen = false; 
         p.trapped = false;
         
         for (let i = 0; i < handSize; i++) {
@@ -1631,7 +1686,10 @@ saboIo.on('connection', (socket) => {
     socket.on('stealGold', ({ roomCode, targetId }) => {
         try {
             const room = saboRooms[roomCode];
-            if (!room) return;
+            if (!room || room.phase !== 'ROUND_END') return;
+
+            // [추가] 턴 체크
+            if (room.currentThiefId !== socket.id) return;
 
             const thiefPlayer = room.players.find(p => p.id === socket.id || p.userId === socket.userId);
             const targetPlayer = room.players.find(p => p.id === targetId || p.userId === targetId);
@@ -1643,14 +1701,36 @@ saboIo.on('connection', (socket) => {
                 thiefPlayer.gold = (thiefPlayer.gold || 0) + 1;
                 thiefPlayer.thief = false;
 
-                emitSaboUpdate(roomCode, room);
                 saboIo.to(roomCode).emit('actionAnnounce', {
                     actionText: `🦹 ${thiefPlayer.name}님이 ${targetPlayer.name}님의 금을 훔쳤습니다!`
                 });
+
+                room.thiefQueue.shift();
+                processThiefQueue(room, roomCode);
             }
         } catch (error) {
             console.error("Steal Gold Error:", error);
         }
+    });
+
+    // [추가] 훔치기 건너뛰기
+    socket.on('skipSteal', ({ roomCode }) => {
+        try {
+            const room = saboRooms[roomCode];
+            if (!room || room.phase !== 'ROUND_END') return;
+            if (room.currentThiefId !== socket.id) return;
+            
+            const thiefPlayer = room.players.find(p => p.id === socket.id);
+            if (thiefPlayer) {
+                thiefPlayer.thief = false;
+                saboIo.to(roomCode).emit('actionAnnounce', {
+                    actionText: `🦹 ${thiefPlayer.name}님이 금 훔치기를 건너뛰었습니다.`
+                });
+            }
+
+            room.thiefQueue.shift();
+            processThiefQueue(room, roomCode);
+        } catch (error) { console.error("Skip Steal Error:", error); }
     });
 
     socket.on('mapCheckDone', ({ roomCode, row }) => {
@@ -1707,11 +1787,18 @@ saboIo.on('connection', (socket) => {
                 room.players.push({
                     id: socket.id, name: userName, userId, isBot, ready: room.players.length === 0, 
                     gold: 0, tools: { pickaxe: true, lantern: true, cart: true }, thief: false, trapped: false,
-                    hasStolen: false, hand: [], connected: true, isSpectator
+                    hand: [], connected: true, isSpectator
                 });
             } else {
+                const oldId = existingPlayer.id;
                 existingPlayer.id = socket.id;
                 existingPlayer.connected = true;
+                
+                if (room.turnId === oldId) room.turnId = socket.id;
+                
+                // [추가] 재접속 시 도둑 턴 데이터 복구
+                if (room.currentThiefId === oldId) room.currentThiefId = socket.id;
+                if (room.thiefQueue) room.thiefQueue = room.thiefQueue.map(id => id === oldId ? socket.id : id);
             }
             emitSaboUpdate(roomCode, room);
         } catch(e) {}
@@ -1840,14 +1927,14 @@ saboIo.on('connection', (socket) => {
                             actionText = `🔄 ${player.name}님이 ${target.name}의 직업을 바꿨습니다!`;
                         }
                         else if (d.includes('도둑방지') || d.includes('도둑막기') || d.includes('도둑잡기')) {
-   			 target.thief = false;
-   			 actionText = `👮 ${target.name}의 도둑질이 차단되었습니다!`;
-		}
-		else if (d.includes('도둑')) {
-  			  if (player.thief) return; // [추가] 이미 도둑 상태라면 동작을 무시 (이중 차단)
-  			  player.thief = true;
-   			 actionText = `🦹 ${player.name}님이 도둑질을 준비합니다.`;
-		}
+                            target.thief = false;
+                            actionText = `👮 ${target.name}의 도둑질이 차단되었습니다!`;
+                        }
+                        else if (d.includes('도둑')) {
+                            if (player.thief) return;
+                            player.thief = true;
+                            actionText = `🦹 ${player.name}님이 도둑질을 준비합니다.`;
+                        }
                         else if (d.includes('감옥탈출') || d.includes('탈옥') || d.includes('감옥해방')) {
                             target.trapped = false;
                             actionText = `🕊️ ${target.name}님이 감옥에서 풀려났습니다!`;
