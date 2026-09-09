@@ -1597,8 +1597,8 @@ function createSaboDeck() {
 saboIo.on('connection', (socket) => {
     socket.on('pingHeartbeat', () => { socket.emit('pongHeartbeat'); });
     
-    // 타 플레이어의 화면에서도 즉각 덮어지도록 하는 이벤트
-    socket.on('mapCheckDone', ({ roomCode, row }) => {
+    // [동기화 수정] 맵 체크(지도 확인) 완료 시 모든 플레이어 화면에서 지도가 정상적으로 닫히도록 동기화
+    socket.on('confirmMapCheck', ({ roomCode, row }) => {
         try {
             const room = saboRooms[roomCode];
             if (!room) return;
