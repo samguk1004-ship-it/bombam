@@ -1483,16 +1483,9 @@ function endSaboRound(room, isMinerWin) {
         p.gold = (p.gold || 0) + earnedGold;
     });
 
-    room.players.forEach(p => {
-        if (p.thief && !p.trapped) {
-            const targets = room.players.filter(t => t.id !== p.id && t.gold > 0);
-            if (targets.length > 0) {
-                const victim = targets[Math.floor(Math.random() * targets.length)];
-                victim.gold -= 1;
-                p.gold += 1;
-            }
-        }
-    });
+    // ==========================================
+    // 삭제됨: 라운드 종료 시 자동으로 금을 훔치는 로직 삭제
+    // ==========================================
 }
 
 function startSaboRound(room) {
@@ -1597,6 +1590,43 @@ function createSaboDeck() {
 saboIo.on('connection', (socket) => {
     socket.on('pingHeartbeat', () => { socket.emit('pongHeartbeat'); });
     
+    // ==========================================
+    // [추가] 금덩이 직접 훔치기 이벤트 처리
+    // ==========================================
+    socket.on('stealGold', ({ roomCode, targetId }) => {
+        try {
+            const room = saboRooms[roomCode];
+            if (!room) return;
+
+            // 요청을 보낸 도둑 플레이어와 타겟 플레이어 찾기
+            const thiefPlayer = room.players.find(p => p.id === socket.id || p.userId === socket.userId);
+            const targetPlayer = room.players.find(p => p.id === targetId || p.userId === targetId);
+
+            if (!thiefPlayer || !targetPlayer) return;
+
+            // 도둑 상태인지 확인 & 타겟이 금덩이를 가지고 있는지 확인
+            if (thiefPlayer.thief && targetPlayer.gold > 0) {
+                
+                // 금 1개 훔치기
+                targetPlayer.gold -= 1;
+                thiefPlayer.gold = (thiefPlayer.gold || 0) + 1;
+
+                // 중복 방지를 위해 훔친 후에는 도둑 상태 해제
+                thiefPlayer.thief = false;
+
+                // 모든 플레이어에게 업데이트된 정보(정산창 금덩이 갯수) 브로드캐스트
+                emitSaboUpdate(roomCode, room);
+                
+                // 누가 누구의 금을 훔쳤는지 로그 메시지 띄우기
+                saboIo.to(roomCode).emit('actionAnnounce', {
+                    actionText: `🦹 ${thiefPlayer.name}님이 ${targetPlayer.name}님의 금을 훔쳤습니다!`
+                });
+            }
+        } catch (error) {
+            console.error("Steal Gold Error:", error);
+        }
+    });
+
     socket.on('mapCheckDone', ({ roomCode, row }) => {
         try {
             const room = saboRooms[roomCode];
