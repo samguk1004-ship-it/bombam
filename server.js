@@ -1840,13 +1840,14 @@ saboIo.on('connection', (socket) => {
                             actionText = `🔄 ${player.name}님이 ${target.name}의 직업을 바꿨습니다!`;
                         }
                         else if (d.includes('도둑방지') || d.includes('도둑막기') || d.includes('도둑잡기')) {
-                            target.thief = false;
-                            actionText = `👮 ${target.name}의 도둑질이 차단되었습니다!`;
-                        }
-                        else if (d.includes('도둑')) {
-                            player.thief = true;
-                            actionText = `🦹 ${player.name}님이 도둑질을 준비합니다.`;
-                        }
+   			 target.thief = false;
+   			 actionText = `👮 ${target.name}의 도둑질이 차단되었습니다!`;
+		}
+		else if (d.includes('도둑')) {
+  			  if (player.thief) return; // [추가] 이미 도둑 상태라면 동작을 무시 (이중 차단)
+  			  player.thief = true;
+   			 actionText = `🦹 ${player.name}님이 도둑질을 준비합니다.`;
+		}
                         else if (d.includes('감옥탈출') || d.includes('탈옥') || d.includes('감옥해방')) {
                             target.trapped = false;
                             actionText = `🕊️ ${target.name}님이 감옥에서 풀려났습니다!`;
