@@ -1270,7 +1270,6 @@ coupIo.on('connection', (socket) => {
     });
 });
 
-
 // ==========================================
 // ⛏️ [4] 사보타지 전용 (Namespace: /sabo)
 // ==========================================
@@ -1280,7 +1279,6 @@ const saboDisconnectTimers = {};
 
 const SABO_DEST_ROWS = [2, 4, 6];
 
-// [수정됨] 29번 터널 카드 및 링크 구조 분리 적용
 const PATH_EDGES = {
     '03': [1,0,1,0], '04': [0,1,0,1], '05': [1,1,0,0], '06': [1,0,0,1], '07': [1,1,1,0],
     '08': [1,1,1,1], '09': [1,1,0,1],
@@ -1291,14 +1289,13 @@ const PATH_EDGES = {
     '23': { edges: [1, 1, 1, 0], links: [[1,2]] }, '24': { edges: [1, 1, 1, 1], links: [[0,2]] }, 
     '25': { edges: [1, 1, 1, 1], links: [[1,3]] }, '26': { edges: [1, 1, 1, 1], links: [[0,3], [1,2]] }, 
     '27': { edges: [1, 1, 1, 0], links: [[0,1]] }, '28': { edges: [1, 1, 1, 1], links: [[0,1], [2,3]] },
-    '29': { edges: [1, 1, 1, 1], links: [[0, 2], [1, 3]] }, 
+    '29': { edges: [1, 1, 1, 1], links: [[0, 2], [1, 3]] },
     '31': [1,1,1,1], '32': { edges: [0,0,0,1], links: [] }, '33': { edges: [1, 1, 1, 1], links: [[1, 2, 3]] },  '34': { edges: [1, 1, 1, 1], links: [[0, 2, 3]] },
     '35': [0,1,1,1], '36': { edges: [0, 0, 1, 0], links: [] }, '37': { edges: [1, 1, 1, 0], links: [[0, 1, 2]] }, '38': { edges: [0, 1, 1, 1], links: [[1, 3]] },
     '41': { edges: [1, 1, 1, 0], links: [[0, 2]] }, '42': [0,1,0,1], '43': [0,1,1,0], '44': [0,1,0,1], '45': [1,0,1,0], '46': [0,0,1,0],
     '47': [0,0,0,1], '48': [1,1,0,0], '49': [1,0,0,1], '50': [0,0,1,0]
 };
 
-// [수정됨] 회전 시 링크 연결점 대응 기능 추가
 function getCardEdges(imgCode, isRotated) {
     const data = PATH_EDGES[imgCode] || [1,1,1,1];
     const baseEdges = Array.isArray(data) ? data : data.edges;
@@ -1320,7 +1317,6 @@ function getCardEdges(imgCode, isRotated) {
     return { top, right, bottom, left, internalLinks };
 }
 
-// [수정됨] 29번 터널 카드의 분리된 길을 감지하도록 BFS 로직 업그레이드
 function isDestConnectedToStart(board, destCol, destRow) {
     const occupied = new Map();
     occupied.set('2,4', { top: 1, right: 1, bottom: 1, left: 1, internalLinks: [[0,1,2,3]] });
@@ -1502,7 +1498,7 @@ function checkSaboRoundEnd(room) {
 // ==========================================
 function processThiefQueue(room, roomCode) {
     if (!room.thiefQueue || room.thiefQueue.length === 0) {
-        room.currentThiefId = null; // 도둑 차례 종료
+        room.currentThiefId = null; 
         emitSaboUpdate(roomCode, room);
         return;
     }
@@ -1567,9 +1563,8 @@ function endSaboRound(room, isMinerWin) {
         p.gold = (p.gold || 0) + earnedGold;
     });
 
-    // [추가] 정산 후 도둑 큐 생성 및 실행
     const thieves = room.players.filter(p => p.thief);
-    room.thiefQueue = thieves.map(t => t.id);
+    room.thiefQueue = thieves.map(t => t.id); 
     processThiefQueue(room, room.roomCode);
 }
 
@@ -1596,6 +1591,7 @@ function startSaboRound(room) {
         p.hand = [];
         p.tools = { pickaxe: true, lantern: true, cart: true };
         p.thief = false;
+        p.hasStolen = false; 
         p.trapped = false;
         
         for (let i = 0; i < handSize; i++) {
@@ -1674,7 +1670,7 @@ function createSaboDeck() {
 saboIo.on('connection', (socket) => {
     socket.on('pingHeartbeat', () => { socket.emit('pongHeartbeat'); });
     
-    // [추가] 행동 카드 중앙 애니메이션 브로드캐스트
+    // [추가] 행동 카드 애니메이션 동기화
     socket.on('actionCardAnimSync', (data) => {
         try {
             saboIo.to(data.roomCode).emit('actionCardAnimSync', data);
@@ -1686,12 +1682,9 @@ saboIo.on('connection', (socket) => {
     socket.on('stealGold', ({ roomCode, targetId }) => {
         try {
             const room = saboRooms[roomCode];
-            if (!room || room.phase !== 'ROUND_END') return;
+            if (!room) return;
 
-            // [추가] 턴 체크
-            if (room.currentThiefId !== socket.id) return;
-
-            const thiefPlayer = room.players.find(p => p.id === socket.id || p.userId === socket.userId);
+            const thiefPlayer = room.players.find(p => p.id === socket.id);
             const targetPlayer = room.players.find(p => p.id === targetId || p.userId === targetId);
 
             if (!thiefPlayer || !targetPlayer) return;
@@ -1699,37 +1692,41 @@ saboIo.on('connection', (socket) => {
             if (thiefPlayer.thief && targetPlayer.gold > 0) {
                 targetPlayer.gold -= 1;
                 thiefPlayer.gold = (thiefPlayer.gold || 0) + 1;
-                thiefPlayer.thief = false;
+                thiefPlayer.thief = false; 
 
                 saboIo.to(roomCode).emit('actionAnnounce', {
                     actionText: `🦹 ${thiefPlayer.name}님이 ${targetPlayer.name}님의 금을 훔쳤습니다!`
                 });
 
-                room.thiefQueue.shift();
-                processThiefQueue(room, roomCode);
+                if (room.thiefQueue && room.thiefQueue.length > 0) {
+                    room.thiefQueue.shift();
+                    processThiefQueue(room, roomCode);
+                } else {
+                    emitSaboUpdate(roomCode, room);
+                }
             }
-        } catch (error) {
-            console.error("Steal Gold Error:", error);
-        }
+        } catch (error) { console.error("Steal Gold Error:", error); }
     });
 
-    // [추가] 훔치기 건너뛰기
     socket.on('skipSteal', ({ roomCode }) => {
         try {
             const room = saboRooms[roomCode];
-            if (!room || room.phase !== 'ROUND_END') return;
-            if (room.currentThiefId !== socket.id) return;
+            if (!room) return;
             
             const thiefPlayer = room.players.find(p => p.id === socket.id);
-            if (thiefPlayer) {
+            if (thiefPlayer && thiefPlayer.thief) {
                 thiefPlayer.thief = false;
                 saboIo.to(roomCode).emit('actionAnnounce', {
                     actionText: `🦹 ${thiefPlayer.name}님이 금 훔치기를 건너뛰었습니다.`
                 });
             }
 
-            room.thiefQueue.shift();
-            processThiefQueue(room, roomCode);
+            if (room.thiefQueue && room.thiefQueue.length > 0) {
+                room.thiefQueue.shift();
+                processThiefQueue(room, roomCode);
+            } else {
+                emitSaboUpdate(roomCode, room);
+            }
         } catch (error) { console.error("Skip Steal Error:", error); }
     });
 
@@ -1787,16 +1784,15 @@ saboIo.on('connection', (socket) => {
                 room.players.push({
                     id: socket.id, name: userName, userId, isBot, ready: room.players.length === 0, 
                     gold: 0, tools: { pickaxe: true, lantern: true, cart: true }, thief: false, trapped: false,
-                    hand: [], connected: true, isSpectator
+                    hasStolen: false, hand: [], connected: true, isSpectator
                 });
             } else {
                 const oldId = existingPlayer.id;
                 existingPlayer.id = socket.id;
                 existingPlayer.connected = true;
-                
+
                 if (room.turnId === oldId) room.turnId = socket.id;
                 
-                // [추가] 재접속 시 도둑 턴 데이터 복구
                 if (room.currentThiefId === oldId) room.currentThiefId = socket.id;
                 if (room.thiefQueue) room.thiefQueue = room.thiefQueue.map(id => id === oldId ? socket.id : id);
             }
