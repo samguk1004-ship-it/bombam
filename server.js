@@ -1792,6 +1792,9 @@ saboIo.on('connection', (socket) => {
             const room = saboRooms[roomCode];
             if (!room) return;
 
+            // [추가] 자신의 도둑 차례일 때만 즉시 실행되도록 허용하여 큐(순번) 꼬임 방지
+            if (room.currentThiefId !== socket.id) return;
+
             const thiefPlayer = room.players.find(p => p.id === socket.id);
             const targetPlayer = room.players.find(p => p.id === targetId || p.userId === targetId);
 
@@ -1802,7 +1805,6 @@ saboIo.on('connection', (socket) => {
                 thiefPlayer.gold = (thiefPlayer.gold || 0) + 1;
                 thiefPlayer.thief = false; 
 
-                // [추가] 금덩이 증감 애니메이션을 위해 양측의 ID를 모두 전송
                 saboIo.to(roomCode).emit('stealAnim', { 
                     thiefId: thiefPlayer.id || thiefPlayer.userId, 
                     victimId: targetPlayer.id || targetPlayer.userId 
@@ -1827,6 +1829,9 @@ saboIo.on('connection', (socket) => {
             const room = saboRooms[roomCode];
             if (!room) return;
             
+            // [추가] 자신의 도둑 차례일 때만 허용
+            if (room.currentThiefId !== socket.id) return;
+
             const thiefPlayer = room.players.find(p => p.id === socket.id);
             if (thiefPlayer && thiefPlayer.thief) {
                 thiefPlayer.thief = false;
@@ -1843,7 +1848,7 @@ saboIo.on('connection', (socket) => {
             }
         } catch (error) { console.error("Skip Steal Error:", error); }
     });
-
+    
     socket.on('mapCheckDone', ({ roomCode, row }) => {
         try {
             const room = saboRooms[roomCode];
