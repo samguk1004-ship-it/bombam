@@ -1323,7 +1323,6 @@ function isDestConnectedToStart(board, destCol, destRow) {
     occupied.set('2,4', { top: 1, right: 1, bottom: 1, left: 1, internalLinks: [[0,1,2,3]] });
     
     board.forEach(c => { 
-        // [버그수정] 이미 공개된 도착점 카드(석탄)를 통과하여 길을 연결할 수 있도록 예외(if) 처리 제거
         occupied.set(`${c.col},${c.row}`, getCardEdges(c.imgCode, c.isRotated)); 
     });
 
@@ -1348,8 +1347,9 @@ function isDestConnectedToStart(board, destCol, destRow) {
         const nc = col + offset.dc; 
         const nr = row + offset.dr;
         
+        // [수정] 연결되었을 때 true가 아니라, 어느 방향(포트)으로 들어왔는지 객체로 반환
         if (nc === destCol && nr === destRow) {
-            return true;
+            return { connected: true, inPort: offset.opp };
         }
 
         const nextKey = `${nc},${nr}`;
@@ -1380,7 +1380,8 @@ function isDestConnectedToStart(board, destCol, destRow) {
             }
         }
     }
-    return false;
+    // [수정] 연결되지 않았을 때 반환값 객체화
+    return { connected: false };
 }
 
 function emitSaboUpdate(roomCode, room) {
@@ -2017,9 +2018,16 @@ saboIo.on('connection', (socket) => {
 
                             for (const targetRow of SABO_DEST_ROWS) {
                                 if (!room.board.find(b => b.col === 10 && b.row === targetRow)) {
-                                    if (isDestConnectedToStart(room.board, 10, targetRow)) {
+                                    const destCheck = isDestConnectedToStart(room.board, 10, targetRow);
+                                    
+                                    // [수정] true 대신 객체의 connected 속성 확인
+                                    if (destCheck && destCheck.connected) {
                                         const isGold = (targetRow === room.goldRow);
-                                        room.board.push({ col: 10, row: targetRow, imgCode: isGold ? '01' : '02', isRotated: false });
+                                        
+                                        // [핵심] 우측(포트 1)이나 아래(포트 2)에서 연결되었고, 석탄카드(!isGold)이면 180도 회전
+                                        const shouldRotate = !isGold && (destCheck.inPort === 1 || destCheck.inPort === 2);
+                                        
+                                        room.board.push({ col: 10, row: targetRow, imgCode: isGold ? '01' : '02', isRotated: shouldRotate });
                                         
                                         if (isGold) {
                                             saboIo.to(roomCode).emit('actionAnnounce', { actionText: `🎉 ${player.name}님이 금덩이를 발견했습니다!` });
