@@ -1528,6 +1528,12 @@ function processThiefQueue(room, roomCode) {
         currentThief.gold = (currentThief.gold || 0) + 1;
         currentThief.thief = false;
         
+        // [추가] 봇이 훔칠 때도 금덩이 애니메이션 발생
+        saboIo.to(roomCode).emit('stealAnim', { 
+            thiefId: currentThief.id || currentThief.userId, 
+            victimId: target.id || target.userId 
+        });
+
         saboIo.to(roomCode).emit('actionAnnounce', {
             actionText: `🦹 ${currentThief.name}님이 ${target.name}님의 금을 훔쳤습니다!`
         });
@@ -1795,6 +1801,12 @@ saboIo.on('connection', (socket) => {
                 targetPlayer.gold -= 1;
                 thiefPlayer.gold = (thiefPlayer.gold || 0) + 1;
                 thiefPlayer.thief = false; 
+
+                // [추가] 금덩이 증감 애니메이션을 위해 양측의 ID를 모두 전송
+                saboIo.to(roomCode).emit('stealAnim', { 
+                    thiefId: thiefPlayer.id || thiefPlayer.userId, 
+                    victimId: targetPlayer.id || targetPlayer.userId 
+                });
 
                 saboIo.to(roomCode).emit('actionAnnounce', {
                     actionText: `🦹 ${thiefPlayer.name}님이 ${targetPlayer.name}님의 금을 훔쳤습니다!`
