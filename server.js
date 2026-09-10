@@ -1542,38 +1542,125 @@ function processThiefQueue(room, roomCode) {
     }
 }
 
-function endSaboRound(room, isMinerWin, pathType = 'NORMAL') {
+function endSaboRound(room, isMinerWin) {
     room.phase = 'ROUND_END';
     
+    let greenWins = false;
+    let blueWins = false;
+    let peacefulWin = false;
+    let actualMinerWin = isMinerWin;
+
+    // 광부들이 금을 찾았다면, 출발점(2,4)에서 금덩이까지 경로를 추적하여 마지막 통과 문을 확인합니다.
+    if (isMinerWin) {
+        const destCol = 10;
+        const destRow = room.goldRow;
+        
+        const occupied = new Map();
+        occupied.set('2,4', { top: 1, right: 1, bottom: 1, left: 1, internalLinks: [[0,1,2,3]], imgCode: 'start' });
+        
+        room.board.forEach(c => {
+            occupied.set(`${c.col},${c.row}`, { ...getCardEdges(c.imgCode, c.isRotated), imgCode: c.imgCode });
+        });
+        
+        const connectedPorts = new Set();
+        const queue = [];
+        
+        // 탐색 큐에는 현재까지 통과한 '가장 마지막 문' 정보를 같이 전달합니다 (기본: 'NONE')
+        [0, 1, 2, 3].forEach(d => {
+            connectedPorts.add(`2,4,${d}`);
+            queue.push({ col: 2, row: 4, outDir: d, lastDoor: 'NONE' });
+        });
+        
+        const DIR_OFFSETS = [ 
+            { dc: 0, dr: -1, opp: 2, name: 'top' }, 
+            { dc: 1, dr: 0, opp: 3, name: 'right' }, 
+            { dc: 0, dr: 1, opp: 0, name: 'bottom' }, 
+            { dc: -1, dr: 0, opp: 1, name: 'left' } 
+        ];
+
+        let winningDoor = null;
+
+        while(queue.length > 0) {
+            const { col, row, outDir, lastDoor } = queue.shift();
+            const offset = DIR_OFFSETS[outDir];
+            const nc = col + offset.dc; 
+            const nr = row + offset.dr;
+            
+            // 금덩이에 도달했을 때, 가장 짧게 도달한 경로의 마지막 문 색상을 저장하고 종료
+            if (nc === destCol && nr === destRow) {
+                if (!winningDoor) winningDoor = lastDoor;
+                break;
+            }
+
+            const nextKey = `${nc},${nr}`;
+            const nextNode = occupied.get(nextKey);
+            
+            if (nextNode && !nextNode.isDest) {
+                const inDir = offset.opp;
+                const inDirName = DIR_OFFSETS[inDir].name;
+                if (nextNode[inDirName] === 1) {
+                    const inPort = `${nextKey},${inDir}`;
+                    if (!connectedPorts.has(inPort)) {
+                        connectedPorts.add(inPort);
+                        
+                        // 현재 지나가는 카드가 색깔 문이면 상태를 업데이트합니다.
+                        let currentDoor = lastDoor;
+                        if (['41','42','43'].includes(nextNode.imgCode)) currentDoor = 'GREEN';
+                        else if (['44','45','46'].includes(nextNode.imgCode)) currentDoor = 'BLUE';
+
+                        const links = nextNode.internalLinks || [];
+                        const myGroup = links.find(group => group.includes(inDir));
+                        if (myGroup) {
+                            myGroup.forEach(outD => {
+                                const outPort = `${nextKey},${outD}`;
+                                if (!connectedPorts.has(outPort)) {
+                                    connectedPorts.add(outPort);
+                                    queue.push({ col: nc, row: nr, outDir: outD, lastDoor: currentDoor });
+                                }
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        // 경로 추적 결과에 따라 승리 팀 판별
+        if (winningDoor === 'GREEN') greenWins = true;
+        else if (winningDoor === 'BLUE') blueWins = true;
+        else if (winningDoor === 'NONE') peacefulWin = true;
+        else actualMinerWin = false; // 도달할 수 없는 버그 엣지 케이스 방어
+    }
+
     room.players.forEach(p => {
         const isPenalized = p.trapped; 
         let earnedGold = 0;
         
         if (!isPenalized) {
-            if (isMinerWin) {
-                if (pathType === 'GREEN') {
+            if (actualMinerWin) {
+                if (peacefulWin) {
+                    if (['파란광부', '초록광부'].includes(p.role)) earnedGold = 2; // 평화 승리 시 양팀 2개
+                    if (p.role === '대장') earnedGold = 1; // 2 - 1 = 1개
+                } else if (greenWins) {
                     if (p.role === '초록광부') earnedGold = 3;
-                    else if (p.role === '파란광부') earnedGold = 0;
-                    else if (p.role === '대장') earnedGold = 2;
-                    else if (p.role === '부당이익자') earnedGold = 1;
-                } else if (pathType === 'BLUE') {
+                    if (p.role === '대장') earnedGold = 2; // 3 - 1 = 2개
+                } else if (blueWins) {
                     if (p.role === '파란광부') earnedGold = 3;
-                    else if (p.role === '초록광부') earnedGold = 0;
-                    else if (p.role === '대장') earnedGold = 2;
-                    else if (p.role === '부당이익자') earnedGold = 1;
-                } else { // NORMAL
-                    if (['파란광부', '초록광부'].includes(p.role)) earnedGold = 2;
-                    else if (p.role === '대장') earnedGold = 1;
-                    else if (p.role === '부당이익자') earnedGold = 1;
+                    if (p.role === '대장') earnedGold = 2; // 3 - 1 = 2개
                 }
+                
+                // 부당이익자는 광부 승리 시 항상 1개
+                if (p.role === '부당이익자') earnedGold = 1;
+                
             } else {
+                // 방해꾼 승리 시 (광부 실패)
                 if (p.role === '방해꾼') earnedGold = 3;
                 if (p.role === '부당이익자') earnedGold = 1;
             }
+            
+            // 지질학자는 승패와 무관하게 기존과 동일하게 랜덤(1~3)으로 대체된 룰 유지
             if (p.role === '지질학자') earnedGold = Math.floor(Math.random() * 3) + 1;
         }
         
-        p.earnedGoldThisRound = earnedGold;
         p.gold = (p.gold || 0) + earnedGold;
     });
 
