@@ -1318,16 +1318,13 @@ function getCardEdges(imgCode, isRotated) {
     return { top, right, bottom, left, internalLinks };
 }
 
-function isDestConnectedToStart(board, destCol, destRow, ignoredDoorCodes = []) {
+function isDestConnectedToStart(board, destCol, destRow) {
     const occupied = new Map();
     occupied.set('2,4', { top: 1, right: 1, bottom: 1, left: 1, internalLinks: [[0,1,2,3]] });
     
     board.forEach(c => { 
-        if (c.col !== 10 || !SABO_DEST_ROWS.includes(c.row)) {
-            if (!ignoredDoorCodes.includes(c.imgCode)) {
-                occupied.set(`${c.col},${c.row}`, getCardEdges(c.imgCode, c.isRotated)); 
-            }
-        }
+        // [버그수정] 이미 공개된 도착점 카드(석탄)를 통과하여 길을 연결할 수 있도록 예외(if) 처리 제거
+        occupied.set(`${c.col},${c.row}`, getCardEdges(c.imgCode, c.isRotated)); 
     });
 
     const connectedPorts = new Set();
