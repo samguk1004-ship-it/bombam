@@ -1317,13 +1317,15 @@ function getCardEdges(imgCode, isRotated) {
     return { top, right, bottom, left, internalLinks };
 }
 
-function isDestConnectedToStart(board, destCol, destRow) {
+function isDestConnectedToStart(board, destCol, destRow, ignoredDoorCodes = []) {
     const occupied = new Map();
     occupied.set('2,4', { top: 1, right: 1, bottom: 1, left: 1, internalLinks: [[0,1,2,3]] });
     
     board.forEach(c => { 
         if (c.col !== 10 || !SABO_DEST_ROWS.includes(c.row)) {
-            occupied.set(`${c.col},${c.row}`, getCardEdges(c.imgCode, c.isRotated)); 
+            if (!ignoredDoorCodes.includes(c.imgCode)) {
+                occupied.set(`${c.col},${c.row}`, getCardEdges(c.imgCode, c.isRotated)); 
+            }
         }
     });
 
@@ -1541,7 +1543,7 @@ function processThiefQueue(room, roomCode) {
     }
 }
 
-function endSaboRound(room, isMinerWin) {
+function endSaboRound(room, isMinerWin, pathType = 'NORMAL') {
     room.phase = 'ROUND_END';
     
     room.players.forEach(p => {
@@ -1550,9 +1552,21 @@ function endSaboRound(room, isMinerWin) {
         
         if (!isPenalized) {
             if (isMinerWin) {
-                if (['파란광부', '초록광부', '대장'].includes(p.role)) earnedGold = 3;
-                if (p.role === '대장') earnedGold = Math.max(0, earnedGold - 1);
-                if (p.role === '부당이익자') earnedGold = 1;
+                if (pathType === 'GREEN') {
+                    if (p.role === '초록광부') earnedGold = 3;
+                    else if (p.role === '파란광부') earnedGold = 0;
+                    else if (p.role === '대장') earnedGold = 2;
+                    else if (p.role === '부당이익자') earnedGold = 1;
+                } else if (pathType === 'BLUE') {
+                    if (p.role === '파란광부') earnedGold = 3;
+                    else if (p.role === '초록광부') earnedGold = 0;
+                    else if (p.role === '대장') earnedGold = 2;
+                    else if (p.role === '부당이익자') earnedGold = 1;
+                } else { // NORMAL
+                    if (['파란광부', '초록광부'].includes(p.role)) earnedGold = 2;
+                    else if (p.role === '대장') earnedGold = 1;
+                    else if (p.role === '부당이익자') earnedGold = 1;
+                }
             } else {
                 if (p.role === '방해꾼') earnedGold = 3;
                 if (p.role === '부당이익자') earnedGold = 1;
@@ -1560,6 +1574,7 @@ function endSaboRound(room, isMinerWin) {
             if (p.role === '지질학자') earnedGold = Math.floor(Math.random() * 3) + 1;
         }
         
+        p.earnedGoldThisRound = earnedGold;
         p.gold = (p.gold || 0) + earnedGold;
     });
 
@@ -1593,6 +1608,7 @@ function startSaboRound(room) {
         p.thief = false;
         p.hasStolen = false; 
         p.trapped = false;
+        p.earnedGoldThisRound = 0;
         
         for (let i = 0; i < handSize; i++) {
             if(room.deck.length > 0) p.hand.push(room.deck.shift());
@@ -2017,6 +2033,16 @@ saboIo.on('connection', (socket) => {
                                                 if (room.deck && room.deck.length > 0) player.hand.push(room.deck.shift());
                                             }
 
+                                            const canGreenReach = isDestConnectedToStart(room.board, 10, targetRow, ['44','45','46']);
+                                            const canBlueReach = isDestConnectedToStart(room.board, 10, targetRow, ['41','42','43']);
+
+                                            let pathType = 'NORMAL';
+                                            if (canGreenReach && !canBlueReach) pathType = 'GREEN';
+                                            else if (canBlueReach && !canGreenReach) pathType = 'BLUE';
+                                            else if (!canGreenReach && !canBlueReach) pathType = 'NONE';
+                                            else pathType = 'NORMAL';
+
+                                            room.winPathType = pathType;
                                             room.phase = 'REVEALING_GOLD'; 
                                             clearSaboTimer(room);
                                             turnWillEnd = false; 
@@ -2025,7 +2051,8 @@ saboIo.on('connection', (socket) => {
                                             setTimeout(() => {
                                                 const curRoom = saboRooms[roomCode];
                                                 if (curRoom && curRoom.phase === 'REVEALING_GOLD') {
-                                                    endSaboRound(curRoom, true);
+                                                    const isMinerWin = curRoom.winPathType !== 'NONE';
+                                                    endSaboRound(curRoom, isMinerWin, curRoom.winPathType);
                                                     emitSaboUpdate(roomCode, curRoom);
                                                 }
                                             }, 4000);
