@@ -1280,7 +1280,7 @@ const saboDisconnectTimers = {};
 const SABO_DEST_ROWS = [2, 4, 6];
 
 const PATH_EDGES = {
-    '01': [1,1,1,1], '02': [1,1,1,1], // [버그수정] 도착점(금, 석탄) 카드를 십자형으로 명시적 추가
+    '01': [1,1,1,1], '02': [1,1,1,1], 
     '03': [1,0,1,0], '04': [0,1,0,1], '05': [1,1,0,0], '06': [1,0,0,1], '07': [1,1,1,0],
     '08': [1,1,1,1], '09': [1,1,0,1],
     '10': { edges: [1,1,1,1], links: [] }, '11': { edges: [1,0,1,1], links: [] }, '12': { edges: [1,1,0,1], links: [] }, 
@@ -1347,7 +1347,6 @@ function isDestConnectedToStart(board, destCol, destRow) {
         const nc = col + offset.dc; 
         const nr = row + offset.dr;
         
-        // [수정] 연결되었을 때 true가 아니라, 어느 방향(포트)으로 들어왔는지 객체로 반환
         if (nc === destCol && nr === destRow) {
             return { connected: true, inPort: offset.opp };
         }
@@ -1380,7 +1379,6 @@ function isDestConnectedToStart(board, destCol, destRow) {
             }
         }
     }
-    // [수정] 연결되지 않았을 때 반환값 객체화
     return { connected: false };
 }
 
@@ -1494,9 +1492,6 @@ function checkSaboRoundEnd(room) {
     return false;
 }
 
-// ==========================================
-// [추가] 도둑 순번(Queue) 처리 함수
-// ==========================================
 function processThiefQueue(room, roomCode) {
     if (!room.thiefQueue || room.thiefQueue.length === 0) {
         room.currentThiefId = null; 
@@ -1528,7 +1523,6 @@ function processThiefQueue(room, roomCode) {
         currentThief.gold = (currentThief.gold || 0) + 1;
         currentThief.thief = false;
         
-        // [추가] 봇이 훔칠 때도 금덩이 애니메이션 발생
         saboIo.to(roomCode).emit('stealAnim', { 
             thiefId: currentThief.id || currentThief.userId, 
             victimId: target.id || target.userId 
@@ -1637,6 +1631,13 @@ function endSaboRound(room, isMinerWin) {
         else actualMinerWin = false; // 도달할 수 없는 버그 엣지 케이스 방어
     }
 
+    // [버그 수정] 보드에 깔린 수정(Crystal) 카드 개수 카운트
+    const crystalCodes = ['31', '32', '33', '34', '35', '36', '37', '38'];
+    let crystalCount = 0;
+    if (room.board) {
+        crystalCount = room.board.filter(c => crystalCodes.includes(c.imgCode)).length;
+    }
+
     room.players.forEach(p => {
         const isPenalized = p.trapped; 
         let earnedGold = 0;
@@ -1663,8 +1664,8 @@ function endSaboRound(room, isMinerWin) {
                 if (p.role === '부당이익자') earnedGold = 1;
             }
             
-            // 지질학자는 승패와 무관하게 기존과 동일하게 랜덤(1~3)으로 대체된 룰 유지
-            if (p.role === '지질학자') earnedGold = Math.floor(Math.random() * 3) + 1;
+            // [버그 수정] 지질학자는 맵(보드)에 연결된 수정 카드의 개수만큼 금 획득
+            if (p.role === '지질학자') earnedGold = crystalCount;
         }
         
         p.gold = (p.gold || 0) + earnedGold;
@@ -1778,7 +1779,6 @@ function createSaboDeck() {
 saboIo.on('connection', (socket) => {
     socket.on('pingHeartbeat', () => { socket.emit('pongHeartbeat'); });
     
-    // [추가] 행동 카드 애니메이션 동기화
     socket.on('actionCardAnimSync', (data) => {
         try {
             saboIo.to(data.roomCode).emit('actionCardAnimSync', data);
@@ -1792,7 +1792,6 @@ saboIo.on('connection', (socket) => {
             const room = saboRooms[roomCode];
             if (!room) return;
 
-            // [추가] 자신의 도둑 차례일 때만 즉시 실행되도록 허용하여 큐(순번) 꼬임 방지
             if (room.currentThiefId !== socket.id) return;
 
             const thiefPlayer = room.players.find(p => p.id === socket.id);
@@ -1829,7 +1828,6 @@ saboIo.on('connection', (socket) => {
             const room = saboRooms[roomCode];
             if (!room) return;
             
-            // [추가] 자신의 도둑 차례일 때만 허용
             if (room.currentThiefId !== socket.id) return;
 
             const thiefPlayer = room.players.find(p => p.id === socket.id);
@@ -2124,11 +2122,9 @@ saboIo.on('connection', (socket) => {
                                 if (!room.board.find(b => b.col === 10 && b.row === targetRow)) {
                                     const destCheck = isDestConnectedToStart(room.board, 10, targetRow);
                                     
-                                    // [수정] true 대신 객체의 connected 속성 확인
                                     if (destCheck && destCheck.connected) {
                                         const isGold = (targetRow === room.goldRow);
                                         
-                                        // [핵심] 우측(포트 1)이나 아래(포트 2)에서 연결되었고, 석탄카드(!isGold)이면 180도 회전
                                         const shouldRotate = !isGold && (destCheck.inPort === 1 || destCheck.inPort === 2);
                                         
                                         room.board.push({ col: 10, row: targetRow, imgCode: isGold ? '01' : '02', isRotated: shouldRotate });
