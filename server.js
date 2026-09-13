@@ -1318,6 +1318,51 @@ function getCardEdges(imgCode, isRotated) {
     return { top, right, bottom, left, internalLinks };
 }
 
+// [추가] 서버에서 목적지 카드의 가장 적절한 회전 방향을 계산하는 함수
+function calculateDestRotation(board, col, row, imgCode) {
+    const unrotatedEdges = getCardEdges(imgCode, false);
+    const rotatedEdges = getCardEdges(imgCode, true);
+    
+    const leftC = board.find(b => b.col === col - 1 && b.row === row);
+    const rightC = board.find(b => b.col === col + 1 && b.row === row);
+    const topC = board.find(b => b.col === col && b.row === row - 1);
+    const bottomC = board.find(b => b.col === col && b.row === row + 1);
+
+    let unrotatedMatches = 0;
+    let rotatedMatches = 0;
+
+    if (leftC) { 
+        const edges = getCardEdges(leftC.imgCode, leftC.isRotated); 
+        if (edges.right === 1) { 
+            if (unrotatedEdges.left === 1) unrotatedMatches++; 
+            if (rotatedEdges.left === 1) rotatedMatches++; 
+        } 
+    }
+    if (rightC) { 
+        const edges = getCardEdges(rightC.imgCode, rightC.isRotated); 
+        if (edges.left === 1) { 
+            if (unrotatedEdges.right === 1) unrotatedMatches++; 
+            if (rotatedEdges.right === 1) rotatedMatches++; 
+        } 
+    }
+    if (topC) { 
+        const edges = getCardEdges(topC.imgCode, topC.isRotated); 
+        if (edges.bottom === 1) { 
+            if (unrotatedEdges.top === 1) unrotatedMatches++; 
+            if (rotatedEdges.top === 1) rotatedMatches++; 
+        } 
+    }
+    if (bottomC) { 
+        const edges = getCardEdges(bottomC.imgCode, bottomC.isRotated); 
+        if (edges.top === 1) { 
+            if (unrotatedEdges.bottom === 1) unrotatedMatches++; 
+            if (rotatedEdges.bottom === 1) rotatedMatches++; 
+        } 
+    }
+
+    return rotatedMatches > unrotatedMatches;
+}
+
 function isDestConnectedToStart(board, destCol, destRow) {
     const occupied = new Map();
     occupied.set('2,4', { top: 1, right: 1, bottom: 1, left: 1, internalLinks: [[0,1,2,3]] });
@@ -1508,6 +1553,19 @@ function processThiefQueue(room, roomCode) {
         return;
     }
 
+    // [추가] 감옥에 수감된 도둑은 자동 스킵 (UI 멈춤 방지)
+    if (currentThief.trapped) {
+        currentThief.thief = false;
+        room.thiefQueue.shift();
+        saboIo.to(roomCode).emit('actionAnnounce', {
+            actionText: `🦹 ${currentThief.name}님은 감옥에 수감되어 도둑질을 건너뜁니다.`
+        });
+        setTimeout(() => {
+            processThiefQueue(room, roomCode);
+        }, 1500);
+        return;
+    }
+
     const validTargets = room.players.filter(p => p.id !== currentThief.id && p.gold > 0);
     
     if (validTargets.length === 0) {
@@ -1550,7 +1608,6 @@ function endSaboRound(room, isMinerWin) {
     let peacefulWin = false;
     let actualMinerWin = isMinerWin;
 
-    // 광부들이 금을 찾았다면, 출발점(2,4)에서 금덩이까지 경로를 추적하여 마지막 통과 문을 확인합니다.
     if (isMinerWin) {
         const destCol = 10;
         const destRow = room.goldRow;
@@ -1565,7 +1622,6 @@ function endSaboRound(room, isMinerWin) {
         const connectedPorts = new Set();
         const queue = [];
         
-        // 탐색 큐에는 현재까지 통과한 '가장 마지막 문' 정보를 같이 전달합니다 (기본: 'NONE')
         [0, 1, 2, 3].forEach(d => {
             connectedPorts.add(`2,4,${d}`);
             queue.push({ col: 2, row: 4, outDir: d, lastDoor: 'NONE' });
@@ -1586,7 +1642,6 @@ function endSaboRound(room, isMinerWin) {
             const nc = col + offset.dc; 
             const nr = row + offset.dr;
             
-            // 금덩이에 도달했을 때, 가장 짧게 도달한 경로의 마지막 문 색상을 저장하고 종료
             if (nc === destCol && nr === destRow) {
                 if (!winningDoor) winningDoor = lastDoor;
                 break;
@@ -1603,7 +1658,6 @@ function endSaboRound(room, isMinerWin) {
                     if (!connectedPorts.has(inPort)) {
                         connectedPorts.add(inPort);
                         
-                        // 현재 지나가는 카드가 색깔 문이면 상태를 업데이트합니다.
                         let currentDoor = lastDoor;
                         if (['41','42','43'].includes(nextNode.imgCode)) currentDoor = 'GREEN';
                         else if (['44','45','46'].includes(nextNode.imgCode)) currentDoor = 'BLUE';
@@ -1624,14 +1678,12 @@ function endSaboRound(room, isMinerWin) {
             }
         }
 
-        // 경로 추적 결과에 따라 승리 팀 판별
         if (winningDoor === 'GREEN') greenWins = true;
         else if (winningDoor === 'BLUE') blueWins = true;
         else if (winningDoor === 'NONE') peacefulWin = true;
-        else actualMinerWin = false; // 도달할 수 없는 버그 엣지 케이스 방어
+        else actualMinerWin = false; 
     }
 
-    // [버그 수정] 보드에 깔린 수정(Crystal) 카드 개수 카운트
     const crystalCodes = ['31', '32', '33', '34', '35', '36', '37', '38'];
     let crystalCount = 0;
     if (room.board) {
@@ -1645,26 +1697,23 @@ function endSaboRound(room, isMinerWin) {
         if (!isPenalized) {
             if (actualMinerWin) {
                 if (peacefulWin) {
-                    if (['파란광부', '초록광부'].includes(p.role)) earnedGold = 2; // 평화 승리 시 양팀 2개
-                    if (p.role === '대장') earnedGold = 1; // 2 - 1 = 1개
+                    if (['파란광부', '초록광부'].includes(p.role)) earnedGold = 2; 
+                    if (p.role === '대장') earnedGold = 1; 
                 } else if (greenWins) {
                     if (p.role === '초록광부') earnedGold = 3;
-                    if (p.role === '대장') earnedGold = 2; // 3 - 1 = 2개
+                    if (p.role === '대장') earnedGold = 2; 
                 } else if (blueWins) {
                     if (p.role === '파란광부') earnedGold = 3;
-                    if (p.role === '대장') earnedGold = 2; // 3 - 1 = 2개
+                    if (p.role === '대장') earnedGold = 2; 
                 }
                 
-                // 부당이익자는 광부 승리 시 항상 1개
                 if (p.role === '부당이익자') earnedGold = 1;
                 
             } else {
-                // 방해꾼 승리 시 (광부 실패)
                 if (p.role === '방해꾼') earnedGold = 3;
                 if (p.role === '부당이익자') earnedGold = 1;
             }
             
-            // [버그 수정] 지질학자는 맵(보드)에 연결된 수정 카드의 개수만큼 금 획득
             if (p.role === '지질학자') earnedGold = crystalCount;
         }
         
@@ -1798,6 +1847,9 @@ saboIo.on('connection', (socket) => {
             const targetPlayer = room.players.find(p => p.id === targetId || p.userId === targetId);
 
             if (!thiefPlayer || !targetPlayer) return;
+
+            // [추가] 훔치기를 시도하는 본인이 감옥 상태라면 서버에서 무시
+            if (thiefPlayer.trapped) return;
 
             if (thiefPlayer.thief && targetPlayer.gold > 0) {
                 targetPlayer.gold -= 1;
@@ -2125,9 +2177,11 @@ saboIo.on('connection', (socket) => {
                                     if (destCheck && destCheck.connected) {
                                         const isGold = (targetRow === room.goldRow);
                                         
-                                        const shouldRotate = !isGold && (destCheck.inPort === 1 || destCheck.inPort === 2);
+                                        // [수정] 서버에서 목적지 카드의 회전 방향 직접 계산
+                                        const destImgCode = isGold ? '01' : '02';
+                                        const shouldRotate = calculateDestRotation(room.board, 10, targetRow, destImgCode);
                                         
-                                        room.board.push({ col: 10, row: targetRow, imgCode: isGold ? '01' : '02', isRotated: shouldRotate });
+                                        room.board.push({ col: 10, row: targetRow, imgCode: destImgCode, isRotated: shouldRotate });
                                         
                                         if (isGold) {
                                             saboIo.to(roomCode).emit('actionAnnounce', { actionText: `🎉 ${player.name}님이 금덩이를 발견했습니다!` });
